@@ -5,24 +5,63 @@ from pydub import AudioSegment
 from pydub.silence import detect_silence
 from youtube_transcript_api import YouTubeTranscriptApi
 import streamlit as st
+from multiprocessing import Process, Queue
 
 # Check for GPU and set device globally
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Load whisper model globally to avoid reloading
-@st.cache_resource
-def load_whisper_model(logger):
-    """Loads the Whisper model onto the appropriate device (GPU or CPU)."""
-    logger.info("Loading Whisper model...")
+def _transcribe_worker(audio_path, device, queue):
+    """
+    This function runs in a separate process to isolate Whisper model loading
+    and transcription, which can sometimes conflict with Streamlit's main thread
+    or resource management.
+    """
     try:
-        model = whisper.load_model("base", device=DEVICE)
-        logger.info(f"Whisper model 'base' loaded successfully onto {DEVICE.upper()}.")
-        return model
+        # Load model inside the worker process
+        model = whisper.load_model("base", device=device)
+        result = model.transcribe(audio_path, word_timestamps=True)
+        
+        transcript = []
+        for segment in result['segments']:
+            transcript.append({
+                "timestamp": segment['start'],
+                "text": segment['text'].strip()
+            })
+        queue.put(transcript)
     except Exception as e:
-        logger.exception("Failed to load Whisper model.")
-        st.error(f"Failed to load Whisper model: {e}")
-        st.info("This might be due to a network issue or an incorrect PyTorch/CUDA setup.")
+        # Pass the exception back to the main process
+        queue.put(e)
+
+def transcribe_audio_with_whisper(audio_path, logger):
+    """
+    Transcribes audio using OpenAI's Whisper model by spawning an isolated
+    process to run the transcription, ensuring better stability with Streamlit.
+    """
+    logger.info(f"Starting transcription for {audio_path} in a separate process on {DEVICE.upper()}.")
+    st.write(f"Transcribing audio with Whisper on {DEVICE.upper()}... (This may take a while for long videos)")
+
+    q = Queue()
+    p = Process(target=_transcribe_worker, args=(audio_path, DEVICE, q))
+    
+    try:
+        p.start()
+        p.join()  # Wait for the process to complete
+        
+        result = q.get()
+        if isinstance(result, Exception):
+            # If an exception was put in the queue, re-raise it in the main process
+            raise result
+        
+        logger.info(f"Transcription complete. Generated {len(result)} segments.")
+        return result
+    except Exception as e:
+        logger.exception(f"Error during transcription with Whisper for {audio_path}.")
+        st.error(f"Error during transcription with Whisper: {e}")
         return None
+    finally:
+        # Ensure the process is terminated if it's still alive (e.g., due to a timeout or unhandled error)
+        if p.is_alive():
+            p.terminate()
 
 def get_youtube_transcript(video_id, logger):
     """Fetches the transcript for a YouTube video if available."""
@@ -39,32 +78,6 @@ def get_youtube_transcript(video_id, logger):
         return formatted_transcript
     except Exception as e:
         logger.warning(f"Could not retrieve YouTube transcript for video ID {video_id}. It may not exist. Error: {e}")
-        return None
-
-def transcribe_audio_with_whisper(audio_path, logger):
-    """Transcribes audio using OpenAI's Whisper model on GPU if available."""
-    try:
-        model = load_whisper_model(logger)
-        if not model:
-            logger.error("Whisper model is not loaded, cannot transcribe.")
-            return None
-            
-        logger.info(f"Starting transcription for {audio_path} on {DEVICE.upper()}.")
-        st.write(f"Transcribing audio with Whisper on {DEVICE.upper()}... (This may take a while for long videos)")
-        result = model.transcribe(audio_path, word_timestamps=True)
-        
-        transcript = []
-        for segment in result['segments']:
-            transcript.append({
-                "timestamp": segment['start'],
-                "text": segment['text'].strip()
-            })
-        
-        logger.info(f"Transcription complete. Generated {len(transcript)} segments.")
-        return transcript
-    except Exception as e:
-        logger.exception(f"Error during transcription with Whisper for {audio_path}.")
-        st.error(f"Error during transcription with Whisper: {e}")
         return None
 
 def detect_audio_cuts(audio_path, logger, min_silence_len=300, silence_thresh=-40):

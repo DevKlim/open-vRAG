@@ -10,13 +10,14 @@ ENV TZ=Etc/UTC
 WORKDIR /app
 
 # Install system dependencies
-# This layer is cached as it rarely changes.
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
     ffmpeg \
     wget \
     unzip \
+    curl \
+    # Added curl for chromedriver download
     libgl1-mesa-glx \
     libglib2.0-0 \
     libnss3 \
@@ -38,29 +39,22 @@ RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.d
     dpkg -i google-chrome-stable_current_amd64.deb; apt-get -fy install && \
     rm google-chrome-stable_current_amd64.deb
 
+# Install a specific version of chromedriver
+# This makes the scraper setup much more reliable than using webdriver-manager at runtime.
+RUN CHROME_DRIVER_VERSION=$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE) && \
+    wget -q https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_DRIVER_VERSION}/linux64/chromedriver-linux64.zip && \
+    unzip chromedriver-linux64.zip && \
+    mv chromedriver-linux64/chromedriver /usr/bin/chromedriver && \
+    chown root:root /usr/bin/chromedriver && \
+    chmod +x /usr/bin/chromedriver && \
+    rm chromedriver-linux64.zip
+
 # --- Docker Cache Optimization ---
-
-# Install PyTorch with CUDA 11.8 support FIRST
-# This is a large, slow-to-install dependency that rarely changes.
-# By installing it before copying requirements.txt, this layer will be cached
-# and will NOT be re-run even if requirements.txt or app code changes.
 RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# Copy only the requirements file to leverage Docker cache
 COPY requirements.txt .
-
-# Install the rest of the Python dependencies
-# This layer is only re-built if the requirements.txt file changes.
 RUN pip3 install --no-cache-dir -r requirements.txt
-
-# Now, copy the rest of the application code
-# Since this is one of the last steps, changes to your source code (e.g., app.py)
-# will only invalidate this layer, leading to very fast rebuilds.
 COPY . .
 
-# Expose the Streamlit port
 EXPOSE 8501
-
-# Command to run the Streamlit app
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

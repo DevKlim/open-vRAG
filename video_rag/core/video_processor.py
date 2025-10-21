@@ -5,14 +5,17 @@ from .utils import seconds_to_filename_str, clean_filename
 import streamlit as st
 import ffmpeg
 
-def download_youtube_video(url, output_path, logger):
-    """Downloads the best MP4 stream from YouTube using yt-dlp for reliability."""
+def download_youtube_video(url, output_path, logger, quality_format, cookie_path=None):
+    """Downloads a YouTube video stream using specified quality format, with optional cookie support."""
     safe_title = "youtube_video"
     video_id = None
     try:
-        # First, get video info without downloading
         logger.info(f"Fetching metadata for YouTube URL: {url}")
         ydl_info_opts = {'quiet': True, 'no_warnings': True}
+        if cookie_path and os.path.exists(cookie_path):
+            ydl_info_opts['cookiefile'] = cookie_path
+            logger.info(f"Using cookie file: {cookie_path}")
+
         with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             safe_title = clean_filename(info.get('title', 'youtube_video'))
@@ -22,13 +25,15 @@ def download_youtube_video(url, output_path, logger):
         video_filepath = os.path.join(output_path, video_filename)
 
         ydl_download_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'format': quality_format,
             'outtmpl': video_filepath,
             'quiet': True,
             'progress_hooks': [lambda d: logger.info(f"yt-dlp status: {d['status']}, {_bytes_to_str(d.get('downloaded_bytes', 0))} / {_bytes_to_str(d.get('total_bytes', 0))}") if d['status'] == 'downloading' else None]
         }
-        
-        logger.info(f"Starting download for '{safe_title}'...")
+        if cookie_path and os.path.exists(cookie_path):
+            ydl_download_opts['cookiefile'] = cookie_path
+
+        logger.info(f"Starting download for '{safe_title}' with format '{quality_format}'...")
         st.write(f"Downloading '{safe_title}'...")
         with yt_dlp.YoutubeDL(ydl_download_opts) as ydl:
             ydl.download([url])
@@ -37,11 +42,16 @@ def download_youtube_video(url, output_path, logger):
         st.write("Download complete.")
         return video_filepath, video_id
 
+    except yt_dlp.utils.DownloadError as e:
+        error_message = f"yt-dlp download error: {e}"
+        logger.error(error_message)
+        st.error(f"Failed to download YouTube video: {e}")
+        st.warning("This may be due to a rate limit, private/deleted video, or regional block. Try using a cookies.txt file from your browser to bypass this issue.")
+        return None, None
     except Exception as e:
-        error_message = f"Error downloading YouTube video: {e}"
-        logger.exception(error_message) # Log the full traceback to the file
+        error_message = f"An unexpected error occurred during download: {e}"
+        logger.exception(error_message)
         st.error(error_message)
-        st.info("This could be due to a private video, an age-restricted video, or a regional block. Check the log file for details.")
         return None, None
 
 def _bytes_to_str(b):

@@ -8,7 +8,10 @@ pandas
 selenium
 beautifulsoup4
 webdriver-manager
-# torch, torchvision, and toraudio are installed separately in the Dockerfile for GPU support.
-# This file contains the remaining dependencies.
 openai-whisper
 youtube-transcript-api
+langchain
+langchain-community
+langchain-google-genai
+chromadb
+lxml

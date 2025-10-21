@@ -32,4 +32,4 @@ def setup_logger(job_dir, log_filename='analysis.log'):
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
     
-    return logger
+    return logger
