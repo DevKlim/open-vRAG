@@ -6,11 +6,11 @@ This module provides a web-based tool for conducting a deep analysis of video co
 
 The primary goal is to create a rich, structured dataset from a video that can be used for Retrieval-Augmented Generation (RAG), allowing users to "chat" with the video's content to get detailed, context-aware answers.
 
-## Features
+## What the tooling does!!!
 
 -   **Multi-Source Input**: Analyze videos by uploading a local file or pasting a YouTube URL.
 -   **GPU Accelerated**: Automatically utilizes an NVIDIA GPU if available to significantly speed up audio transcription.
--   **Configurable Frame Extraction**: Users can set the frequency for regular frame extraction (e.g., one frame every 10 seconds).
+-   **Configurable Frame Extraction**: Users can set the frequency for regular frame extraction (for instance, one frame every 10 seconds).
 -   **Intelligent Frame Triggering**: In addition to regular intervals, frames are automatically extracted at key moments, such as:
     -   Potential audio cuts or edits detected in the soundtrack.
     -   "Most replayed" sections of a YouTube video, indicating high audience engagement.
@@ -28,8 +28,9 @@ The primary goal is to create a rich, structured dataset from a video that can b
 
 ### Prerequisites
 
--   Docker and Docker Compose
--   A Google API key with access to the Gemini API.
+-   Docker and Docker Compose (or you can run it locally with installed packages)
+-   A Google API key with access to the Gemini API. (place into a .env file with GOOGLE_API_KEY=...)
+
 -   **For GPU Acceleration**:
     -   An NVIDIA GPU.
     -   The latest NVIDIA drivers for your operating system.
