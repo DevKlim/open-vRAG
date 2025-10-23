@@ -1,0 +1,26 @@
+# vChat/.dockerignore
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore local virtual environment
+venv/
+.venv/
+
+# Ignore local package caches/build artifacts
+.pytest_cache/
+.eggs/
+dist/
+build/
+
+# Ignore local settings
+.env
+
+# Ignore git files
+.git/
+.gitignore
+
+# Ignore downloaded videos and model cache from the build context
+# These will be handled by Docker volumes at runtime.
+videos/
+huggingface_cache/

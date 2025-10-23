@@ -1,0 +1,34 @@
+# Core model dependencies
+python-multipart
+transformers
+accelerate
+# torch, torchvision, and torchaudio are already in the base Docker image
+
+# Vision processing dependencies from my_vision_process.py
+Pillow
+requests
+packaging
+av
+opencv-python
+decord
+imageio
+numpy
+einops
+
+# Web UI and video pipeline dependencies
+fastapi
+uvicorn[standard]
+jinja2
+yt-dlp
+aiofiles
+uv
+
+# --- Fine-tuning Dependencies ---
+# PEFT for Low-Rank Adaptation (LoRA)
+peft
+# For memory-efficient training (e.g., 4-bit quantization)
+bitsandbytes
+# Simplified training library from Hugging Face
+trl
+# For loading datasets
+datasets

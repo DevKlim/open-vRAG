@@ -1,0 +1,27 @@
+services:
+  videochat_webui:
+    build: .
+    container_name: videochat_webui
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the current directory for live code changes
+      - .:/app
+      # Mount a local directory to cache any other Hugging Face assets
+      - ./huggingface_cache:/root/.cache/huggingface
+      # Mount a local directory to store downloaded videos for the web UI
+      - ./videos:/app/videos
+      # Mount a local directory for datasets used by the official scripts
+      - ./data:/app/data
+      # OPTIONAL: If you have downloaded the model locally, mount its directory here to avoid re-downloading.
+      # The local path on the left MUST point to the folder containing the model's .safetensors files.
+      - ./VideoChat-R1:/app/local_model # <-- IMPORTANT: Update this path to match your local model folder's name.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true

@@ -1,3 +1,56 @@
-video_rag/data
-video_rag/.env
-video_rag/cookies.txt
+# vChat/.gitignore
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+.env
+
+# Project-specific data, caches, and models
+# ------------------------------------------
+
+# Ignore downloaded videos
+videos/
+
+# Ignore Hugging Face model cache
+huggingface_cache/
+
+# Ignore the directory where a local copy of the base model might be stored
+# (as referenced in docker-compose.yml)
+VideoChat-R1/
+local_model/
+
+# Ignore the user's custom dataset directory
+data/
+
+# Ignore LoRA adapters generated during fine-tuning
+lora_adapters/
+
+# Log files
+*.log
+logs/
+
+# Testing and coverage reports
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE and editor configuration files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
