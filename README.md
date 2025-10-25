@@ -1,6 +1,6 @@
 # VideoChat-R1.5 Web Interface
 
-This project provides a complete, runnable environment to interact with the `OpenGVLab/VideoChat-R1_5` model through a web interface. You can provide a video URL, and the backend will download it, sanitize it, and analyze it based on your question and configuration.
+This project provides a complete, runnable environment to interact with our fine-tuned model. Our model is built based off of `OpenGVLab/VideoChat-R1_5` model through a web interface. Ultimately, link model with `gemini-flash-latest` for optimal capabilities with video digestion. You can provide a video URL, and the backend will download it, sanitize it, and analyze it based on your question and configuration.
 
 **This application requires an NVIDIA GPU to run.**
 
@@ -70,3 +70,20 @@ Once training is complete, **restart the Docker container**:
 docker-compose restart
 ```
 On startup, the application will automatically detect the saved adapters. Now, when you visit `http://localhost:8000`, a "Select Model" dropdown will appear, allowing you to choose your "Custom Fine-tuned" model for inference.
+
+Citation:
+```
+@article{li2025videochatr1,
+  title={VideoChat-R1: Enhancing Spatio-Temporal Perception via Reinforcement Fine-Tuning},
+  author={Li, Xinhao and Yan, Ziang and Meng, Desen and Dong, Lu and Zeng, Xiangyu and He, Yinan and Wang, Yali and Qiao, Yu and Wang, Yi and Wang, Limin},
+  journal={arXiv preprint arXiv:2504.06958},
+  year={2025}
+}
+
+@article{yan2025videochatr15,
+  title={VideoChat-R1.5: Visual Test-Time Scaling to Reinforce Multimodal Reasoning by Iterative Perception},
+  author={Yan, Ziang and Li, Xinhao and He, Yinan and Zhengrong Yue and Zeng, Xiangyu and Wang, Yali and Qiao, Yu and Wang, Limin and Wang, Yi},
+  journal={arXiv preprint arXiv:2509.21100},
+  year={2025}
+}
+```
