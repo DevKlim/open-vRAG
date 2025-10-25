@@ -8,7 +8,7 @@ from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
 
-# --- Globals for model management ---
+#  Globals for model management 
 processor = None
 base_model = None
 peft_model = None
@@ -31,10 +31,8 @@ def load_models():
     device = torch.device("cuda")
     logger.info(f"CUDA is available. Initializing models on {device}...")
 
-    # --- ROBUSTNESS FIX: Check for a local model copy and ensure it's not empty ---
+ 
     local_model_path = "/app/local_model"
-    # Check if the directory exists AND is not empty before trying to use it.
-    # An incorrect docker-compose mount can create an empty directory, causing a crash.
     if os.path.exists(local_model_path) and os.listdir(local_model_path):
         model_path = local_model_path
         logger.info(f"Found non-empty local model directory at '{model_path}'. Attempting to load from local files.")
@@ -50,7 +48,6 @@ def load_models():
         logger.warning("flash-attn not installed. Falling back to 'sdpa' (PyTorch's native attention).")
         attn_implementation = "sdpa"
 
-    # Load the base model
     logger.info(f"Loading base model from {model_path}...")
     base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_path,
@@ -61,7 +58,6 @@ def load_models():
     processor = AutoProcessor.from_pretrained(model_path)
     logger.info("Base model and processor loaded successfully.")
 
-    # Check for and load LoRA adapters
     lora_adapter_path = "./lora_adapters/final_checkpoint"
     if os.path.exists(lora_adapter_path):
         logger.info(f"Found LoRA adapters at '{lora_adapter_path}'. Loading and merging.")
@@ -76,7 +72,6 @@ def load_models():
     else:
         logger.info("No LoRA adapters found. Only the default model will be available.")
 
-    # Set the default active model
     active_model = base_model
     logger.info(f"Default active model set to: Base Model")
     
@@ -123,7 +118,7 @@ def inference_step(video_path, prompt, generation_kwargs, sampling_fps, pred_glu
     with torch.no_grad():
         output_ids = active_model.generate(**inputs, **generation_kwargs, use_cache=True)
 
-    # --- FIX: Use dictionary key access `inputs['input_ids']` instead of attribute access ---
+    #  FIX: Use dictionary key access `inputs['input_ids']` instead of attribute access 
     generated_ids = [output_ids[i][len(inputs['input_ids'][i]):] for i in range(len(output_ids))]
     output_text = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
     return output_text[0]
@@ -139,14 +134,14 @@ async def run_inference_pipeline(video_path, question, generation_config, prompt
         generation_config["do_sample"] = True
 
     for percption in range(num_perceptions):
-        yield f"--- Perception Iteration {percption + 1}/{num_perceptions} ---\n"
+        yield f" Perception Iteration {percption + 1}/{num_perceptions} \n"
 
         if percption < num_perceptions - 1:
             current_prompt = prompts["glue"].replace("[QUESTION]", question)
         else:
             current_prompt = prompts["final"].replace("[QUESTION]", question)
         
-        yield f"Prompt for this iteration:\n---\n{current_prompt}\n---\n\n"
+        yield f"Prompt for this iteration:\n\n{current_prompt}\n\n\n"
 
         ans = inference_step(
             video_path,
@@ -173,4 +168,4 @@ async def run_inference_pipeline(video_path, question, generation_config, prompt
             yield f"Could not parse glue from output: {e}\n\n"
             pred_glue = None
     
-    yield f"\n--- Final Answer ---\n{final_answer}\n"
+    yield f"\n Final Answer \n{final_answer}\n"

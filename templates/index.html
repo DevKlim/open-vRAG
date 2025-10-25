@@ -11,7 +11,7 @@
         <div class="header">
              <h1>vChat: Ask Questions About Videos</h1>
         </div>
-        <p class="subtitle">Enter a video URL and a question to analyze its content.</p>
+        <p class="subtitle">Enter a video URL to analyze its content with either a direct question or a full factuality check.</p>
         
         <form id="vchat-form">
             <div class="form-grid">
@@ -34,15 +34,44 @@
             </div>
 
             <div class="form-group">
-                <label for="question">Your Question</label>
+                <label for="question">Your Question (for General Q&A)</label>
                 <textarea id="question" name="question" rows="3" required>What is the animal in the video doing?</textarea>
+                <small>This question is used for the standard Q&A. It is ignored if a factuality check is selected.</small>
             </div>
             
             <details class="advanced-options">
+                <summary>Factuality & Credibility Analysis</summary>
+                <p class="form-sub-label">Run a series of automated checks on the video. If any box is checked, this will run instead of the general Q&A above.</p>
+                <fieldset id="factuality-checks">
+                    <legend>Select Checks to Perform:</legend>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="check_visuals" name="check_visuals" value="true">
+                        <label for="check_visuals">Visual Artifacts (AI, edits, watermarks)</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="check_content" name="check_content" value="true">
+                        <label for="check_content">Content Analysis (bias, clickbait, sourcing)</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="check_audio" name="check_audio" value="true">
+                        <label for="check_audio">Audio Anomaly Detection (cuts, transitions)</label>
+                    </div>
+                </fieldset>
+            </details>
+
+            <details class="advanced-options">
                 <summary>Advanced Configuration</summary>
+                <div class="form-group">
+                    <label for="sampling_interval">Frame Sampling</label>
+                    <div class="interval-input">
+                        <span>Sample 1 frame every</span>
+                        <input type="number" id="sampling_interval" value="5" min="0.1" step="0.1">
+                        <span>seconds.</span>
+                    </div>
+                </div>
                 <div class="options-grid">
                     <div class="form-group"><label for="num_perceptions">Perception Iterations</label><input type="number" id="num_perceptions" name="num_perceptions" value="3" min="1" max="10"></div>
-                    <div class="form-group"><label for="sampling_fps">Sampling FPS</label><input type="number" id="sampling_fps" name="sampling_fps" value="2.0" min="0.1" max="30.0" step="0.1"></div>
+                    <div class="form-group"><label for="sampling_fps">Sampling FPS (auto-calculated)</label><input type="number" id="sampling_fps" name="sampling_fps" value="0.2" min="0.01" max="30.0" step="0.01" readonly></div>
                     <div class="form-group"><label for="max_new_tokens">Max New Tokens</label><input type="number" id="max_new_tokens" name="max_new_tokens" value="2048" min="1" step="64"></div>
                     <div class="form-group"><label for="temperature">Temperature</label><input type="number" id="temperature" name="temperature" value="0.7" min="0.0" max="2.0" step="0.1"></div>
                     <div class="form-group"><label for="top_p">Top-P</label><input type="number" id="top_p" name="top_p" value="0.9" min="0.0" max="1.0" step="0.05"></div>
@@ -68,18 +97,27 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         const form = document.getElementById('vchat-form');
         const submitBtn = document.getElementById('submit-btn');
         const outputLog = document.getElementById('output-log');
+        const samplingIntervalInput = document.getElementById('sampling_interval');
+        const samplingFpsInput = document.getElementById('sampling_fps');
 
-        // --- NEW FIX ---
-        // Automatically open the advanced options if an input inside is invalid.
-        // This allows the browser to focus on the invalid field and show the error.
+        function updateFps() {
+            const interval = parseFloat(samplingIntervalInput.value);
+            if (interval > 0) {
+                const fps = 1 / interval;
+                samplingFpsInput.value = fps.toFixed(4);
+            }
+        }
+        
+        samplingIntervalInput.addEventListener('input', updateFps);
+        document.addEventListener('DOMContentLoaded', updateFps); // Set initial value on page load
+
         form.addEventListener('invalid', (event) => {
             const invalidInput = event.target;
             const detailsParent = invalidInput.closest('details');
             if (detailsParent && !detailsParent.open) {
                 detailsParent.open = true;
             }
-        }, true); // Use the capture phase to catch the event early.
-        // --- END FIX ---
+        }, true);
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -91,9 +129,7 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             const formData = new FormData(form);
 
             try {
-                // For debugging: log the data being sent
                 console.log('Submitting form data:', Object.fromEntries(formData.entries()));
-
                 const response = await fetch('/process', {
                     method: 'POST',
                     body: formData,
@@ -101,44 +137,32 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error('Server error response:', errorText);
                     throw new Error(`Server responded with status ${response.status}: ${errorText}`);
                 }
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-                outputLog.textContent = ''; // Clear "Initializing..."
+                outputLog.textContent = '';
                 let buffer = '';
                 let streamClosedByServer = false;
 
                 while (!streamClosedByServer) {
                     const { value, done } = await reader.read();
-                    if (done) {
-                        console.log('Reader has been closed.');
-                        break;
-                    }
+                    if (done) break;
                     
                     buffer += decoder.decode(value, { stream: true });
-                    
                     const messages = buffer.split('\n\n');
-                    // The last element might be an incomplete message, so we keep it in the buffer.
                     buffer = messages.pop() || ''; 
 
                     for (const message of messages) {
                         if (!message) continue;
-
-                        console.log("Received raw message:", JSON.stringify(message));
-
                         if (message.startsWith('event: close')) {
-                            console.log('Server sent close event. Terminating stream processing.');
                             streamClosedByServer = true;
                             break; 
                         }
 
                         if (message.startsWith('data:')) {
                             let data = message.substring(5).trim();
-                            
-                            // Handle carriage return for progress updates on the same line
                             if (data.includes('\r')) {
                                 const lines = outputLog.textContent.split('\n');
                                 lines[lines.length - 1] = data.replace(/\r/g, '');
@@ -146,18 +170,13 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
                             } else {
                                 outputLog.textContent += data;
                             }
-                            // Auto-scroll to the bottom
                             outputLog.scrollTop = outputLog.scrollHeight;
                         }
                     }
                 }
-
                 outputLog.textContent += '\n\n--- Stream finished ---';
-                console.log('Stream processing finished successfully.');
-
             } catch (error) {
                 console.error('An error occurred during the process:', error);
-                // Ensure the error message is clearly visible to the user in the log.
                 outputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nAn error occurred while processing the request.\nDetails: ${error.message}`;
             } finally {
                 submitBtn.disabled = false;
