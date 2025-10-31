@@ -96,6 +96,7 @@ label {
 
 input[type="url"],
 input[type="number"],
+input[type="file"],
 textarea,
 select {
     width: 100%;
@@ -107,6 +108,9 @@ select {
     transition: border-color 0.2s, box-shadow 0.2s;
     background-color: #fff;
 }
+input[type="file"] {
+    padding: 0.5rem;
+}
 
 input[type="number"][readonly] {
     background-color: #f1f3f5;
@@ -116,6 +120,7 @@ input[type="number"][readonly] {
 
 input[type="url"]:focus,
 input[type="number"]:focus,
+input[type="file"]:focus,
 textarea:focus,
 select:focus {
     outline: none;
@@ -168,25 +173,27 @@ button {
     font-weight: 500;
     transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
     border: 1px solid transparent;
-}
-
-button[type="submit"] {
-    display: block;
     width: 100%;
     padding: 0.8rem 1rem;
     background-color: var(--primary-color);
     color: #fff;
-    border: none;
-    margin-top: 1.5rem;
 }
 
-button[type="submit"]:hover:not(:disabled) {
+button:hover:not(:disabled) {
     background-color: var(--primary-hover-color);
 }
 
-button[type="submit"]:disabled {
+button:disabled {
     background-color: #a0c3e8;
     cursor: not-allowed;
+}
+
+button[type="submit"] {
+    margin-top: 1.5rem;
+}
+
+button[type="button"] {
+    margin-top: 1rem;
 }
 
 .output-container {
@@ -200,7 +207,8 @@ h2 {
     margin-bottom: 1rem;
 }
 
-#output-log {
+#output-log,
+#batch-output-log {
     background-color: var(--code-bg-color);
     color: var(--code-text-color);
     padding: 1rem;

@@ -4,7 +4,9 @@ import asyncio
 import subprocess
 from pathlib import Path
 import logging
-from fastapi import FastAPI, Request, Form
+import csv
+import io
+from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -76,39 +78,50 @@ async def run_subprocess_async(command: list[str]):
 
 async def prepare_video_assets_async(url: str) -> dict:
     """
-    Downloads video, subtitles, and extracts audio. Returns a dictionary of file paths.
+    Downloads video (if URL) or finds local video, then prepares assets.
+    Returns a dictionary of file paths.
     """
     global progress_message
     loop = asyncio.get_event_loop()
-    progress_message = "starting video download...\r"
-    
-    ydl_opts = {
-        'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
-        'outtmpl': 'videos/%(id)s.%(ext)s',
-        'progress_hooks': [progress_hook],
-        'writesubtitles': True,
-        'writeautomaticsub': True,
-        'subtitleslangs': ['en'],
-    }
-    
-    video_id = ""
-    original_filepath_str = ""
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
-        original_filepath_str = ydl.prepare_filename(info)
-        video_id = info.get("id")
+    original_path = None
+    transcript_path = None
 
-    progress_message = f"cleaning video file: {original_filepath_str}\n"
-    logging.info(f"og video downloaded to: {original_filepath_str}")
-    original_path = Path(original_filepath_str)
+    is_local_file = not (url.startswith("http://") or url.startswith("https://"))
+
+    if is_local_file:
+        progress_message = f"Processing local file: {url}\n"
+        original_path = Path(url)
+        if not original_path.exists():
+            raise FileNotFoundError(f"Local video file not found at path: {url}")
+    else: # It's a URL, download it
+        progress_message = "starting video download...\r"
+        ydl_opts = {
+            'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+            'outtmpl': 'videos/%(id)s.%(ext)s',
+            'progress_hooks': [progress_hook],
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['en'],
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
+            original_filepath_str = ydl.prepare_filename(info)
+            original_path = Path(original_filepath_str)
+            video_id = info.get("id")
+            video_dir = Path("videos")
+            transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
+
+    progress_message = f"Cleaning video file: {original_path}\n"
+    logging.info(f"Original video path: {original_path}")
+    
+    # Sanitize video and extract audio with ffmpeg (common step)
     sanitized_path = original_path.with_name(f"{original_path.stem}_fixed.mp4")
-    #reencoding as mov doesnt work!
     ffmpeg_video_command = [
         "ffmpeg", "-i", str(original_path), "-c:v", "libx264", "-preset", "fast",
         "-crf", "23", "-c:a", "aac", "-y", str(sanitized_path)
     ]
     await run_subprocess_async(ffmpeg_video_command)
-    progress_message = "video proc. extracting audio...\n"
+    progress_message = "Video processed. Extracting audio...\n"
 
     audio_path = sanitized_path.with_suffix('.wav')
     ffmpeg_audio_command = [
@@ -117,11 +130,6 @@ async def prepare_video_assets_async(url: str) -> dict:
     ]
     await run_subprocess_async(ffmpeg_audio_command)
     progress_message = "Audio extracted successfully.\n"
-
-    # for transcript
-    video_dir = Path("videos")
-    # yt-dlp might add language codes like .en.vtt
-    transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
 
     logging.info(f"Assets prepared: Video='{sanitized_path}', Audio='{audio_path}', Transcript='{transcript_path}'")
     
@@ -133,7 +141,7 @@ async def prepare_video_assets_async(url: str) -> dict:
 
 async def process_request_stream(video_url: str, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict):
     """
-    Generator function that yields progress updates.
+    Generator function that yields progress updates for a single video.
     Routes to either the Q&A pipeline or the Factuality pipeline.
     """
     global progress_message
@@ -149,7 +157,6 @@ async def process_request_stream(video_url: str, question: str, generation_confi
         yield f"data: {progress_message}\n\n"
         paths = await preparation_task
 
-        # pipeline to run
         is_factuality_run = any(checks.values())
         
         if is_factuality_run:
@@ -169,7 +176,9 @@ async def process_request_stream(video_url: str, question: str, generation_confi
         logging.error(f"error in processing stream for URL '{video_url}'", exc_info=True)
         yield f"data: {error_message}\n\n"
     finally:
-        yield "event: close\ndata: Task finished.\n\n"
+        # The 'close' event is now sent by the calling function (process or batch)
+        # to ensure it's only sent once at the very end.
+        pass
 
 @app.post("/process")
 async def process_video_endpoint(
@@ -192,7 +201,93 @@ async def process_video_endpoint(
     check_content: bool = Form(False),
     check_audio: bool = Form(False),
 ):
-    """Endpoint to handle the main video analysis request."""
+    """Endpoint to handle a single video analysis request."""
+    generation_config = {
+        "num_perceptions": num_perceptions,
+        "sampling_fps": sampling_fps,
+        "max_new_tokens": max_new_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "repetition_penalty": repetition_penalty
+    }
+    prompts = {"glue": prompt_glue, "final": prompt_final}
+    checks = {"visuals": check_visuals, "content": check_content, "audio": check_audio}
+    
+    async def stream_wrapper():
+        async for message in process_request_stream(video_url, question, generation_config, prompts, model_selection, checks):
+            yield message
+        yield "event: close\ndata: Task finished.\n\n"
+
+    return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
+
+
+async def process_batch_stream(csv_file: UploadFile, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict):
+    """
+    Generator function that processes a batch of videos from a CSV file.
+    """
+    yield "data: Batch process started. Reading CSV file...\n\n"
+    
+    try:
+        contents = await csv_file.read()
+        decoded_content = contents.decode('utf-8')
+        csv_reader = csv.DictReader(io.StringIO(decoded_content))
+        
+        video_urls = [row.get('url') for row in csv_reader if row.get('url')]
+        
+        if not video_urls:
+            yield "data: ERROR: No 'url' column found or CSV is empty.\n\n"
+            return
+
+        yield f"data: Found {len(video_urls)} videos to process.\n\n"
+
+        for i, url in enumerate(video_urls):
+            yield f"data: \n\n================================\n"
+            yield f"data: Starting Video {i+1}/{len(video_urls)}: {url}\n"
+            yield f"data: ================================\n\n"
+            
+            try:
+                # Reuse the single-video stream processor for each video
+                async for message in process_request_stream(url, question, generation_config, prompts, model_selection, checks):
+                    yield message
+            except Exception as e:
+                error_message = f"\n\nERROR processing {url}: {str(e)}\nThis video will be skipped."
+                logging.error(f"Error in batch processing for URL '{url}'", exc_info=True)
+                yield f"data: {error_message}\n\n"
+            
+            yield f"data: \n\n--- Finished analysis for: {url} ---\n\n"
+    
+    except Exception as e:
+        error_message = f"\n\nFATAL BATCH ERROR: {str(e)}"
+        logging.error("A fatal error occurred during batch processing.", exc_info=True)
+        yield f"data: {error_message}\n\n"
+    finally:
+        yield "data: \n\nBatch processing complete.\n"
+        yield "event: close\ndata: Task finished.\n\n"
+
+
+@app.post("/batch_process")
+async def batch_process_endpoint(
+    # file upload
+    csv_file: UploadFile = File(...),
+    # core params
+    question: str = Form(...),
+    model_selection: str = Form("default"),
+
+    num_perceptions: int = Form(...),
+    sampling_fps: float = Form(...),
+    max_new_tokens: int = Form(...),
+    temperature: float = Form(...),
+    top_p: float = Form(...),
+    repetition_penalty: float = Form(...),
+
+    prompt_glue: str = Form(...),
+    prompt_final: str = Form(...),
+    # factuality checks
+    check_visuals: bool = Form(False),
+    check_content: bool = Form(False),
+    check_audio: bool = Form(False),
+):
+    """Endpoint to handle batch video analysis from a CSV file."""
     generation_config = {
         "num_perceptions": num_perceptions,
         "sampling_fps": sampling_fps,
@@ -205,6 +300,6 @@ async def process_video_endpoint(
     checks = {"visuals": check_visuals, "content": check_content, "audio": check_audio}
 
     return StreamingResponse(
-        process_request_stream(video_url, question, generation_config, prompts, model_selection, checks),
+        process_batch_stream(csv_file, question, generation_config, prompts, model_selection, checks),
         media_type="text/event-stream"
     )

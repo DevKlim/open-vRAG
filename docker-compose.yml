@@ -1,9 +1,14 @@
+# vChat/docker-compose.yml
 services:
   videochat_webui:
     build: .
     container_name: videochat_webui
+    # Add a command to override the Dockerfile's CMD for development.
+    # The --reload flag tells uvicorn to automatically restart the server
+    # whenever it detects a code change in the mounted volume.
+    command: python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "8000:8000"
+      - "8005:8000"
     volumes:
       # Mount the current directory for live code changes
       - .:/app
@@ -14,7 +19,7 @@ services:
       # Mount a local directory for datasets used by the official scripts
       - ./data:/app/data
       # OPTIONAL: If you have downloaded the model locally, mount its directory here to avoid re-downloading.
-      # The local path on the left MUST point to the folder containing the model's .safetensors files.
+      # The local path on the left MUST point to the folder containing the model's .safetokens files.
       - ./VideoChat-R1:/app/local_model # <-- IMPORTANT: Update this path to match your local model folder's name.
     deploy:
       resources:

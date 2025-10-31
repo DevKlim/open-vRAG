@@ -84,12 +84,29 @@ Then, provide your answer within the <answer> </answer> tags. At the same time, 
 Output your think process within the <think> </think> tags.
 Then, provide your answer within the <answer> </answer> tags. For example: <think>...</think><answer>A</answer>.</textarea></div>
             </details>
-            <button type="submit" id="submit-btn">Analyze Video</button>
+
+            <button type="submit" id="submit-btn">Analyze Single Video</button>
         </form>
 
+        <details class="advanced-options" style="margin-top: 1.5rem;">
+            <summary>Batch Processing from CSV</summary>
+            <p class="form-sub-label">Upload a CSV file with a 'url' column to process multiple videos using the same settings defined above. The 'Video URL' field will be ignored.</p>
+            <div class="form-group">
+                <label for="csv_file">CSV File</label>
+                <input type="file" id="csv_file" name="csv_file" accept=".csv" required>
+            </div>
+            <button type="button" id="batch-submit-btn">Analyze Batch</button>
+        </details>
+
+
         <div class="output-container">
-            <h2>Processing Log & Results</h2>
+            <h2>Single Video Log & Results</h2>
             <pre id="output-log">Awaiting input...</pre>
+        </div>
+
+        <div class="output-container">
+            <h2>Batch Processing Log</h2>
+            <pre id="batch-output-log">Awaiting batch job...</pre>
         </div>
     </div>
 
@@ -100,6 +117,10 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         const samplingIntervalInput = document.getElementById('sampling_interval');
         const samplingFpsInput = document.getElementById('sampling_fps');
 
+        const batchSubmitBtn = document.getElementById('batch-submit-btn');
+        const batchOutputLog = document.getElementById('batch-output-log');
+        const csvFileInput = document.getElementById('csv_file');
+
         function updateFps() {
             const interval = parseFloat(samplingIntervalInput.value);
             if (interval > 0) {
@@ -109,7 +130,7 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         }
         
         samplingIntervalInput.addEventListener('input', updateFps);
-        document.addEventListener('DOMContentLoaded', updateFps); // Set initial value on page load
+        document.addEventListener('DOMContentLoaded', updateFps);
 
         form.addEventListener('invalid', (event) => {
             const invalidInput = event.target;
@@ -118,6 +139,44 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
                 detailsParent.open = true;
             }
         }, true);
+
+        async function handleStream(response, logElement) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            logElement.textContent = '';
+            let buffer = '';
+            let streamClosedByServer = false;
+
+            while (!streamClosedByServer) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                buffer += decoder.decode(value, { stream: true });
+                const messages = buffer.split('\n\n');
+                buffer = messages.pop() || ''; 
+
+                for (const message of messages) {
+                    if (!message) continue;
+                    if (message.startsWith('event: close')) {
+                        streamClosedByServer = true;
+                        break; 
+                    }
+
+                    if (message.startsWith('data:')) {
+                        let data = message.substring(5).trim();
+                        if (data.includes('\r')) {
+                            const lines = logElement.textContent.split('\n');
+                            lines[lines.length - 1] = data.replace(/\r/g, '');
+                            logElement.textContent = lines.join('\n');
+                        } else {
+                            logElement.textContent += data;
+                        }
+                        logElement.scrollTop = logElement.scrollHeight;
+                    }
+                }
+            }
+            logElement.textContent += '\n\n--- Stream finished ---';
+        }
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -129,7 +188,6 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             const formData = new FormData(form);
 
             try {
-                console.log('Submitting form data:', Object.fromEntries(formData.entries()));
                 const response = await fetch('/process', {
                     method: 'POST',
                     body: formData,
@@ -139,48 +197,48 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
                     const errorText = await response.text();
                     throw new Error(`Server responded with status ${response.status}: ${errorText}`);
                 }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                outputLog.textContent = '';
-                let buffer = '';
-                let streamClosedByServer = false;
-
-                while (!streamClosedByServer) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    
-                    buffer += decoder.decode(value, { stream: true });
-                    const messages = buffer.split('\n\n');
-                    buffer = messages.pop() || ''; 
-
-                    for (const message of messages) {
-                        if (!message) continue;
-                        if (message.startsWith('event: close')) {
-                            streamClosedByServer = true;
-                            break; 
-                        }
-
-                        if (message.startsWith('data:')) {
-                            let data = message.substring(5).trim();
-                            if (data.includes('\r')) {
-                                const lines = outputLog.textContent.split('\n');
-                                lines[lines.length - 1] = data.replace(/\r/g, '');
-                                outputLog.textContent = lines.join('\n');
-                            } else {
-                                outputLog.textContent += data;
-                            }
-                            outputLog.scrollTop = outputLog.scrollHeight;
-                        }
-                    }
-                }
-                outputLog.textContent += '\n\n--- Stream finished ---';
+                await handleStream(response, outputLog);
             } catch (error) {
-                console.error('An error occurred during the process:', error);
-                outputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nAn error occurred while processing the request.\nDetails: ${error.message}`;
+                console.error('An error occurred during single processing:', error);
+                outputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nDetails: ${error.message}`;
             } finally {
                 submitBtn.disabled = false;
-                submitBtn.textContent = 'Analyze Video';
+                submitBtn.textContent = 'Analyze Single Video';
+            }
+        });
+
+        batchSubmitBtn.addEventListener('click', async () => {
+            if (!csvFileInput.files || csvFileInput.files.length === 0) {
+                alert('Please select a CSV file to upload.');
+                return;
+            }
+
+            batchSubmitBtn.disabled = true;
+            batchSubmitBtn.textContent = 'Processing Batch...';
+            batchOutputLog.textContent = 'Initializing batch request...';
+
+            // Use the main form to get all settings, then add the file
+            const formData = new FormData(form);
+            formData.append('csv_file', csvFileInput.files[0]);
+
+            try {
+                const response = await fetch('/batch_process', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server responded with status ${response.status}: ${errorText}`);
+                }
+                await handleStream(response, batchOutputLog);
+
+            } catch (error) {
+                console.error('An error occurred during batch processing:', error);
+                batchOutputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nDetails: ${error.message}`;
+            } finally {
+                batchSubmitBtn.disabled = false;
+                batchSubmitBtn.textContent = 'Analyze Batch';
             }
         });
     </script>

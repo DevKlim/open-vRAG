@@ -4,7 +4,7 @@ import ast
 import sys
 import os
 import logging
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
 
@@ -49,7 +49,7 @@ def load_models():
         attn_implementation = "sdpa"
 
     logger.info(f"Loading base model from {model_path}...")
-    base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    base_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
@@ -115,12 +115,16 @@ def inference_step(video_path, prompt, generation_kwargs, sampling_fps, pred_glu
     inputs = processor(text=[text], images=image_inputs, videos=video_inputs, fps=fps_inputs, padding=True, return_tensors="pt")
     inputs = {k: v.to(active_model.device) for k, v in inputs.items()}
 
+    logger.info("Generating response from model...")
+    logger.debug(f"Generation kwargs: {generation_kwargs}")
     with torch.no_grad():
         output_ids = active_model.generate(**inputs, **generation_kwargs, use_cache=True)
+    logger.info("Generation complete.")
 
-    #  FIX: Use dictionary key access `inputs['input_ids']` instead of attribute access 
     generated_ids = [output_ids[i][len(inputs['input_ids'][i]):] for i in range(len(output_ids))]
     output_text = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+    
+    logger.debug(f"Raw model output:\n---\n{output_text[0]}\n---")
     return output_text[0]
 
 async def run_inference_pipeline(video_path, question, generation_config, prompts):

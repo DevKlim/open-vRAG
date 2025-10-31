@@ -4,7 +4,7 @@ import ast
 import os
 import sys
 import argparse
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from my_vision_process import process_vision_info, client
 
 # --- Prompt Definitions ---
@@ -35,7 +35,7 @@ def setup_model():
         print("flash-attn not installed. Falling back to 'sdpa' (PyTorch's native attention).")
         attn_implementation = "sdpa"
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="cuda", # Explicitly load the model on the GPU

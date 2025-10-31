@@ -7,7 +7,7 @@ from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoProcessor,
-    Qwen2_5_VLForConditionalGeneration,
+    Qwen3VLForConditionalGeneration,
     TrainingArguments,
     BitsAndBytesConfig,
 )
@@ -91,7 +91,7 @@ def main():
         bnb_4bit_compute_dtype=torch.bfloat16
     )
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model = Qwen3VLForConditionalGeneration.from_pretrained(
         MODEL_ID,
         quantization_config=quantization_config,
         device_map="auto",
