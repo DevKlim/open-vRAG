@@ -7,7 +7,7 @@ from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoProcessor,
-    Qwen2_5_VLForConditionalGeneration,
+    QWen3VLForConditionalGeneration,
     TrainingArguments,
     BitsAndBytesConfig,
 )
@@ -18,13 +18,13 @@ from my_vision_process import process_vision_info
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
+# Configuration
 MODEL_ID = "OpenGVLab/VideoChat-R1_5"
 # IMPORTANT: Create this file! See README.md for the required format.
 DATASET_PATH = "./data/my_dataset.jsonl"
 OUTPUT_DIR = "./lora_adapters"
 
-# --- LoRA Configuration ---
+# LoRA Configuration
 LORA_RANK = 16
 LORA_ALPHA = 32
 LORA_DROPOUT = 0.05
@@ -102,7 +102,7 @@ def main():
         bnb_4bit_compute_dtype=torch.bfloat16
     )
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model = QWen3VLForConditionalGeneration.from_pretrained(
         MODEL_ID,
         quantization_config=quantization_config,
         device_map="auto",

@@ -4,7 +4,7 @@ import ast
 import sys
 import os
 import logging
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
 
@@ -52,7 +52,7 @@ def load_models():
 
     # Load the base model
     logger.info(f"Loading base model from {model_path}...")
-    base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    base_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
@@ -115,7 +115,10 @@ def inference_step(video_path, prompt, generation_kwargs, sampling_fps, pred_glu
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True, client=client)
-    fps_inputs = video_kwargs['fps']
+    
+    # FIX: The processor expects a float for `fps`, but `process_vision_info` returns a list.
+    # Since this flow handles one video at a time, we take the first element from the list.
+    fps_inputs = video_kwargs['fps'][0]
 
     inputs = processor(text=[text], images=image_inputs, videos=video_inputs, fps=fps_inputs, padding=True, return_tensors="pt")
     inputs = {k: v.to(active_model.device) for k, v in inputs.items()}
