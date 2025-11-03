@@ -115,6 +115,35 @@ You should now be able to see and interact with your vChat application running o
 
 ---
 
+## Pro-Tip: Pre-loading Models for Faster Startup
+
+The first time your pod starts, it will download the multi-gigabyte machine learning models into the persistent volume, which can be very slow. To speed this up, you can copy the models directly into the volume after the pod is running.
+
+1.  **Wait for the Pod to be `Running`**:
+    Follow step 3.1 above to ensure your pod is running. You will need the pod's exact name.
+
+2.  **Download the Model Locally (on your computer)**:
+    If you haven't already, download the base model to your local machine:
+    ```bash
+    git lfs install
+    git clone https://huggingface.co/OpenGVLab/VideoChat-R1_5
+    ```
+
+3.  **Copy the Model from Local to the Pod's Volume**:
+    From your **local computer's terminal**, use the `kubectl cp` command. This pushes the files into the pod, and because we mounted a volume at `/app/local_model`, the files land on your persistent storage.
+    ```bash
+    kubectl cp ./VideoChat-R1_5 <your-pod-name-from-above>:/app/local_model
+    ```
+
+4.  **Restart the Pod**:
+    To make the application use the newly copied model on startup, delete the current pod. Kubernetes will automatically create a new one in its place.
+    ```bash
+    kubectl delete pod <your-pod-name-from-above>
+    ```
+    The new pod will now start much faster because it will find the model already in the volume and skip the download.
+
+---
+
 ## Step 4: Cleaning Up
 
 When you are finished, it's important to delete your Kubernetes resources to free up the GPU and storage for others.
@@ -127,3 +156,7 @@ kubectl delete -f k8s/deployment.yaml
 # WARNING: This command will delete the persistent volume claim and ALL data
 # stored in it (cached models, downloaded videos, etc.).
 kubectl delete -f k8s/pvc.yaml
+```
+***
+
+With these new files, you now have a complete and robust set of configurations for deploying your application on the DSMLP cluster.

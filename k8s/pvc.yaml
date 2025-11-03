@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vchat-storage-pvc
+spec:
+  # On DSMLP, this will typically be provisioned on the default StorageClass
+  # which maps to your network home directory storage.
+  accessModes:
+    - ReadWriteOnce # This volume can be mounted by a single node at a time.
+  resources:
+    requests:
+      # Request 100GiB of storage. This should be enough for the base model,
+      # fine-tuned adapters, and several downloaded videos.
+      # Adjust if you expect to store very large amounts of data.
+      storage: 100Gi

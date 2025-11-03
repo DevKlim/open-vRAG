@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vchat-deployment
+spec:
+  replicas: 1 # Only one replica because it uses a GPU and a ReadWriteOnce volume.
+  selector:
+    matchLabels:
+      app: vchat
+  template:
+    metadata:
+      labels:
+        app: vchat
+    spec:
+      containers:
+      - name: vchat-container
+        # IMPORTANT: Replace this with your actual image from Docker Hub.
+        image: docker.io/YOUR_DOCKERHUB_USERNAME/vchat:latest
+        imagePullPolicy: Always # Ensures the latest image version is used on pod restart.
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            # This is how you request a GPU on the DSMLP cluster.
+            nvidia.com/gpu: 1
+        volumeMounts:
+        # Mount the persistent volume for Hugging Face model caching.
+        - name: vchat-storage
+          mountPath: /root/.cache/huggingface
+          subPath: huggingface_cache # Store in a 'huggingface_cache' subdirectory on the PV.
+
+        # Mount the volume for storing downloaded videos.
+        - name: vchat-storage
+          mountPath: /app/videos
+          subPath: videos # Store in a 'videos' subdirectory on the PV.
+
+        # Mount the volume for the pre-downloaded local model.
+        # This path matches what inference_logic.py expects.
+        - name: vchat-storage
+          mountPath: /app/local_model
+          subPath: local_model # Renames 'VideoChat-R1_5' on host to 'local_model' inside the volume.
+
+        # Mount the volume for storing datasets for fine-tuning.
+        - name: vchat-storage
+          mountPath: /app/data
+          subPath: data
+
+        # Mount the volume for storing LoRA adapters from fine-tuning.
+        - name: vchat-storage
+          mountPath: /app/lora_adapters
+          subPath: lora_adapters
+
+      volumes:
+      - name: vchat-storage
+        # This links the volume mounts above to the PersistentVolumeClaim defined in pvc.yaml.
+        persistentVolumeClaim:
+          claimName: vchat-storage-pvc
