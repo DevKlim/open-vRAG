@@ -11,7 +11,7 @@
         <div class="header">
              <h1>vChat: Ask Questions About Videos</h1>
         </div>
-        <p class="subtitle">Enter a video URL to analyze its content with either a direct question or a full factuality check.</p>
+        <p class="subtitle">Enter a video URL to analyze its content with a standard model, a fine-tuned model, or Google's Gemini.</p>
         
         <form id="vchat-form">
             <div class="form-grid">
@@ -21,8 +21,9 @@
                 </div>
                 <div class="form-group">
                     <label for="model_selection">Select Model</label>
-                    <select id="model_selection" name="model_selection" {% if not custom_model_available %}disabled{% endif %}>
+                    <select id="model_selection" name="model_selection">
                         <option value="default">Default Model</option>
+                        <option value="gemini">Gemini Pro Vision</option>
                         {% if custom_model_available %}
                         <option value="custom">Custom Fine-tuned</option>
                         {% endif %}
@@ -30,6 +31,21 @@
                      {% if not custom_model_available %}
                         <small>Run `finetune.py` to enable custom model.</small>
                     {% endif %}
+                </div>
+            </div>
+
+            <div id="gemini-options" class="advanced-options" style="display: none; background-color: #f0f4f8; margin-bottom: 1.5rem;">
+                 <div class="options-grid">
+                    <div class="form-group">
+                        <label for="gemini_api_key">Gemini API Key</label>
+                        <input type="password" id="gemini_api_key" name="gemini_api_key">
+                        <small>Can also be set via URL param `gemini_api_key`</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="gemini_model_name">Gemini Model Name</label>
+                        <input type="text" id="gemini_model_name" name="gemini_model_name" value="models/gemini-1.5-pro-latest">
+                        <small>Can also be set via URL param `gemini_model_name`</small>
+                    </div>
                 </div>
             </div>
 
@@ -60,7 +76,7 @@
             </details>
 
             <details class="advanced-options">
-                <summary>Advanced Configuration</summary>
+                <summary>Advanced Configuration (for Default/Custom Models)</summary>
                 <div class="form-group">
                     <label for="sampling_interval">Frame Sampling</label>
                     <div class="interval-input">
@@ -121,6 +137,11 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         const batchOutputLog = document.getElementById('batch-output-log');
         const csvFileInput = document.getElementById('csv_file');
 
+        const modelSelection = document.getElementById('model_selection');
+        const geminiOptions = document.getElementById('gemini-options');
+        const geminiApiKeyInput = document.getElementById('gemini_api_key');
+        const geminiModelNameInput = document.getElementById('gemini_model_name');
+
         function updateFps() {
             const interval = parseFloat(samplingIntervalInput.value);
             if (interval > 0) {
@@ -129,14 +150,48 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             }
         }
         
+        function toggleGeminiOptions() {
+            if (modelSelection.value === 'gemini') {
+                geminiOptions.style.display = 'block';
+                geminiApiKeyInput.required = true;
+            } else {
+                geminiOptions.style.display = 'none';
+                geminiApiKeyInput.required = false;
+            }
+        }
+
+        function readUrlParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const apiKey = urlParams.get('gemini_api_key');
+            const modelName = urlParams.get('gemini_model_name');
+
+            if (apiKey) {
+                geminiApiKeyInput.value = apiKey;
+                modelSelection.value = 'gemini';
+            }
+            if (modelName) {
+                geminiModelNameInput.value = modelName;
+            }
+            toggleGeminiOptions();
+        }
+
         samplingIntervalInput.addEventListener('input', updateFps);
-        document.addEventListener('DOMContentLoaded', updateFps);
+        modelSelection.addEventListener('change', toggleGeminiOptions);
+        document.addEventListener('DOMContentLoaded', () => {
+            updateFps();
+            readUrlParams();
+        });
+
 
         form.addEventListener('invalid', (event) => {
             const invalidInput = event.target;
             const detailsParent = invalidInput.closest('details');
             if (detailsParent && !detailsParent.open) {
                 detailsParent.open = true;
+            }
+             const geminiParent = invalidInput.closest('#gemini-options');
+            if (geminiParent && geminiParent.style.display === 'none') {
+                toggleGeminiOptions();
             }
         }, true);
 
@@ -210,6 +265,12 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         batchSubmitBtn.addEventListener('click', async () => {
             if (!csvFileInput.files || csvFileInput.files.length === 0) {
                 alert('Please select a CSV file to upload.');
+                return;
+            }
+            if (modelSelection.value === 'gemini' && !geminiApiKeyInput.value) {
+                alert('Please enter a Gemini API Key to run a batch job with Gemini.');
+                toggleGeminiOptions();
+                geminiApiKeyInput.focus();
                 return;
             }
 

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vchat-service
+spec:
+  # NodePort makes the service accessible on a static port on the node's IP.
+  # This is a common and straightforward way to expose services on DSMLP.
+  type: NodePort
+  selector:
+    # This must match the labels of the pods in the Deployment.
+    app: vchat
+  ports:
+    - protocol: TCP
+      port: 8000 # The service's internal port
+      targetPort: 8000 # The port on the pod to forward traffic to
+      # The nodePort will be automatically assigned by Kubernetes in a specific range (e.g., 30000-32767)

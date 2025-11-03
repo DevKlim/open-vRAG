@@ -139,46 +139,51 @@ async def prepare_video_assets_async(url: str) -> dict:
         "transcript": str(transcript_path) if transcript_path and transcript_path.exists() else None,
     }
 
-async def process_request_stream(video_url: str, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict):
+async def process_request_stream(video_url: str, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict, gemini_config: dict):
     """
     Generator function that yields progress updates for a single video.
-    Routes to either the Q&A pipeline or the Factuality pipeline.
+    Routes to the appropriate model pipeline (Gemini or local).
     """
     global progress_message
     paths = None
     try:
-        inference_logic.switch_active_model(model_selection)
-        yield f"data: Using {model_selection.capitalize()} Model for inference.\n\n"
-
+        # Step 1: Uniformly prepare video assets regardless of the model
         preparation_task = asyncio.create_task(prepare_video_assets_async(video_url))
         while not preparation_task.done():
             yield f"data: {progress_message}\n\n"
             await asyncio.sleep(0.2)
         yield f"data: {progress_message}\n\n"
         paths = await preparation_task
+        video_path = paths.get("video")
+        if not video_path:
+            raise ValueError("Video file could not be prepared.")
 
-        is_factuality_run = any(checks.values())
-        
-        if is_factuality_run:
-            yield "data: Starting Factuality & Credibility pipeline...\n\n"
-            async for message in factuality_logic.run_factuality_pipeline(paths, checks, generation_config):
+        # Step 2: Route to the correct model logic
+        if model_selection == 'gemini':
+            yield "data: Using Gemini Model for inference.\n\n"
+            async for message in inference_logic.run_gemini_pipeline(video_path, question, checks, gemini_config):
                 yield f"data: {message}\n\n"
         else:
-            yield "data: Starting General Q&A pipeline...\n\n"
-            video_path = paths.get("video")
-            if not video_path:
-                raise ValueError("Video file could not be prepared.")
-            async for message in inference_logic.run_inference_pipeline(video_path, question, generation_config, prompts):
-                yield f"data: {message}\n\n"
+            inference_logic.switch_active_model(model_selection)
+            yield f"data: Using {model_selection.capitalize()} Model for inference.\n\n"
+            is_factuality_run = any(checks.values())
+            
+            if is_factuality_run:
+                yield "data: Starting Factuality & Credibility pipeline...\n\n"
+                async for message in factuality_logic.run_factuality_pipeline(paths, checks, generation_config):
+                    yield f"data: {message}\n\n"
+            else:
+                yield "data: Starting General Q&A pipeline...\n\n"
+                async for message in inference_logic.run_inference_pipeline(video_path, question, generation_config, prompts):
+                    yield f"data: {message}\n\n"
 
     except Exception as e:
         error_message = f"\n\n ERROR: \nAn error occurred: {str(e)}"
         logging.error(f"error in processing stream for URL '{video_url}'", exc_info=True)
         yield f"data: {error_message}\n\n"
     finally:
-        # The 'close' event is now sent by the calling function (process or batch)
-        # to ensure it's only sent once at the very end.
         pass
+
 
 @app.post("/process")
 async def process_video_endpoint(
@@ -187,15 +192,20 @@ async def process_video_endpoint(
     question: str = Form(...),
     model_selection: str = Form("default"),
 
+    # gemini params
+    gemini_api_key: str = Form(""),
+    gemini_model_name: str = Form(""),
+
+    # local model params
     num_perceptions: int = Form(...),
     sampling_fps: float = Form(...),
     max_new_tokens: int = Form(...),
     temperature: float = Form(...),
     top_p: float = Form(...),
     repetition_penalty: float = Form(...),
-
     prompt_glue: str = Form(...),
     prompt_final: str = Form(...),
+    
     # factuality checks
     check_visuals: bool = Form(False),
     check_content: bool = Form(False),
@@ -212,16 +222,17 @@ async def process_video_endpoint(
     }
     prompts = {"glue": prompt_glue, "final": prompt_final}
     checks = {"visuals": check_visuals, "content": check_content, "audio": check_audio}
+    gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
     
     async def stream_wrapper():
-        async for message in process_request_stream(video_url, question, generation_config, prompts, model_selection, checks):
+        async for message in process_request_stream(video_url, question, generation_config, prompts, model_selection, checks, gemini_config):
             yield message
         yield "event: close\ndata: Task finished.\n\n"
 
     return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
 
 
-async def process_batch_stream(csv_file: UploadFile, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict):
+async def process_batch_stream(csv_file: UploadFile, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict, gemini_config: dict):
     """
     Generator function that processes a batch of videos from a CSV file.
     """
@@ -247,7 +258,7 @@ async def process_batch_stream(csv_file: UploadFile, question: str, generation_c
             
             try:
                 # Reuse the single-video stream processor for each video
-                async for message in process_request_stream(url, question, generation_config, prompts, model_selection, checks):
+                async for message in process_request_stream(url, question, generation_config, prompts, model_selection, checks, gemini_config):
                     yield message
             except Exception as e:
                 error_message = f"\n\nERROR processing {url}: {str(e)}\nThis video will be skipped."
@@ -273,15 +284,20 @@ async def batch_process_endpoint(
     question: str = Form(...),
     model_selection: str = Form("default"),
 
+    # gemini params
+    gemini_api_key: str = Form(""),
+    gemini_model_name: str = Form(""),
+    
+    # local model params
     num_perceptions: int = Form(...),
     sampling_fps: float = Form(...),
     max_new_tokens: int = Form(...),
     temperature: float = Form(...),
     top_p: float = Form(...),
     repetition_penalty: float = Form(...),
-
     prompt_glue: str = Form(...),
     prompt_final: str = Form(...),
+    
     # factuality checks
     check_visuals: bool = Form(False),
     check_content: bool = Form(False),
@@ -298,8 +314,9 @@ async def batch_process_endpoint(
     }
     prompts = {"glue": prompt_glue, "final": prompt_final}
     checks = {"visuals": check_visuals, "content": check_content, "audio": check_audio}
+    gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
 
     return StreamingResponse(
-        process_batch_stream(csv_file, question, generation_config, prompts, model_selection, checks),
+        process_batch_stream(csv_file, question, generation_config, prompts, model_selection, checks, gemini_config),
         media_type="text/event-stream"
     )

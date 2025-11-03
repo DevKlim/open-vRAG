@@ -52,7 +52,7 @@ def inference(video_path, prompt, model, processor, max_new_tokens=2048, client=
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True, client=client)
-    fps_inputs = video_kwargs['fps']
+    fps_inputs = video_kwargs['fps'][0]
 
     inputs = processor(text=[text], images=image_inputs, videos=video_inputs, fps=fps_inputs, padding=True, return_tensors="pt")
     inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -67,7 +67,7 @@ def inference(video_path, prompt, model, processor, max_new_tokens=2048, client=
 
 # This is example usage code. You should replace the placeholders.
 # For example:
-# item = {"problem": {"question": "What is happening in the video?"}}
+# item = {"problem": {"question": "What is the person doing in the video?"}}
 # client = None # Or initialize your client
 # pred_glue = None
 # answers = []

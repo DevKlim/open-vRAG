@@ -4,9 +4,14 @@ import ast
 import sys
 import os
 import logging
+import asyncio
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 #  Globals for model management 
 processor = None
@@ -26,7 +31,7 @@ def load_models():
         return
 
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is not available. This application requires a GPU.")
+        raise RuntimeError("CUDA is not available. This application requires a GPU for local models.")
     
     device = torch.device("cuda")
     logger.info(f"CUDA is available. Initializing models on {device}...")
@@ -110,7 +115,7 @@ def inference_step(video_path, prompt, generation_kwargs, sampling_fps, pred_glu
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True, client=client)
-    fps_inputs = video_kwargs['fps']
+    fps_inputs = video_kwargs['fps'][0]
 
     inputs = processor(text=[text], images=image_inputs, videos=video_inputs, fps=fps_inputs, padding=True, return_tensors="pt")
     inputs = {k: v.to(active_model.device) for k, v in inputs.items()}
@@ -173,3 +178,91 @@ async def run_inference_pipeline(video_path, question, generation_config, prompt
             pred_glue = None
     
     yield f"\n Final Answer \n{final_answer}\n"
+
+
+# --- Gemini Pro Vision Pipeline ---
+
+async def run_gemini_pipeline(video_path: str, question: str, checks: dict, gemini_config: dict):
+    """
+    Handles the entire process of running inference with Gemini, including
+    API configuration, file upload, and response generation.
+    """
+    if genai is None:
+        yield "ERROR: 'google-generativeai' package not installed. Please install it to use Gemini models.\n"
+        return
+
+    api_key = gemini_config.get("api_key")
+    model_name = gemini_config.get("model_name", "models/gemini-1.5-pro-latest")
+
+    if not api_key:
+        yield "ERROR: Gemini API Key is required. Please provide it in the UI or via URL parameters.\n"
+        return
+
+    try:
+        yield "Configuring Google AI client...\n"
+        genai.configure(api_key=api_key)
+    except Exception as e:
+        yield f"ERROR: Failed to configure Google AI client. Check your API key. Details: {e}\n"
+        return
+
+    loop = asyncio.get_event_loop()
+    uploaded_file = None
+    try:
+        # 1. Upload the video file
+        yield f"Uploading video '{os.path.basename(video_path)}' to Google AI... (This may take a moment)\n"
+        uploaded_file = await loop.run_in_executor(None, lambda: genai.upload_file(path=video_path))
+        yield f"File uploaded. Waiting for Google to process it...\n"
+        
+        # 2. Poll for processing status
+        while uploaded_file.state.name == "PROCESSING":
+            yield "  - Processing...\r"
+            await asyncio.sleep(5)
+            uploaded_file = await loop.run_in_executor(None, lambda: genai.get_file(name=uploaded_file.name))
+
+        if uploaded_file.state.name != "ACTIVE":
+            yield f"ERROR: File processing failed. State: {uploaded_file.state.name}\n"
+            return
+        
+        yield "Video is processed and ready for analysis.\n\n"
+        video_input = uploaded_file
+        
+        # 3. Generate content
+        model = genai.GenerativeModel(model_name)
+        is_factuality_run = any(checks.values())
+
+        if is_factuality_run:
+            yield "Starting Gemini Factuality & Credibility pipeline...\n\n"
+            prompts_to_run = []
+            if checks.get("visuals"):
+                prompts_to_run.append(("Visual Artifacts", "You are a digital forensics expert. Analyze this video for any signs of visual manipulation, such as AI-generated artifacts (waxy skin, strange physics), unusual editing cuts, or doctored overlays. Provide a detailed report on the video's visual coherence and authenticity."))
+            if checks.get("content"):
+                prompts_to_run.append(("Content & Credibility", "You are a professional fact-checker. Analyze the spoken content and context of this video. Evaluate its factual accuracy, identify potential misinformation or propaganda, and assess any noticeable political or commercial bias. Report on the credibility of the information presented."))
+            if checks.get("audio"):
+                 prompts_to_run.append(("Audio Anomaly Detection", "You are a media forensics analyst. Analyze the audio track of this video in conjunction with the visuals. Listen for signs of audio manipulation, such as abrupt cuts, changes in background noise that don't match the scene, or clear mismatches in lip-sync. Report on the audio's consistency and authenticity."))
+
+            for title, prompt_text in prompts_to_run:
+                yield f"--- Running '{title}' Analysis with Gemini ---\n"
+                response = await loop.run_in_executor(None, lambda: model.generate_content([prompt_text, video_input], request_options={'timeout': 600}))
+                yield f"===== ANALYSIS RESULT: {title.upper()} =====\n"
+                yield response.text
+                yield f"\n========================================\n\n"
+
+        else: # General Q&A
+            yield "Sending question to Gemini...\n"
+            prompt = [question, video_input]
+            response = await loop.run_in_executor(None, lambda: model.generate_content(prompt, request_options={'timeout': 600}))
+            yield "\n--- Gemini's Response ---\n"
+            yield response.text
+
+    except Exception as e:
+        yield f"ERROR: An error occurred during the Gemini process: {e}\n"
+        logger.error("Gemini pipeline error", exc_info=True)
+    finally:
+        # 4. Clean up the uploaded file
+        if uploaded_file:
+            try:
+                yield "\nCleaning up uploaded file on Google AI...\n"
+                await loop.run_in_executor(None, lambda: genai.delete_file(name=uploaded_file.name))
+                yield "Cleanup complete.\n"
+            except Exception as e:
+                yield f"Warning: Could not clean up uploaded file {uploaded_file.name}. You may need to delete it manually from the Google AI Studio file manager. Details: {e}\n"

@@ -23,6 +23,9 @@ yt-dlp
 aiofiles
 uv
 
+# Gemini API Client
+google-generativeai
+
 # --- Fine-tuning Dependencies ---
 # PEFT for Low-Rank Adaptation (LoRA)
 peft
