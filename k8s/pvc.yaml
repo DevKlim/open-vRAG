@@ -12,4 +12,4 @@ spec:
       # Request 100GiB of storage. This should be enough for the base model,
       # fine-tuned adapters, and several downloaded videos.
       # Adjust if you expect to store very large amounts of data.
-      storage: 100Gi
+      storage: 100Gi

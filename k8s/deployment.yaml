@@ -54,4 +54,4 @@ spec:
       - name: vchat-storage
         # This links the volume mounts above to the PersistentVolumeClaim defined in pvc.yaml.
         persistentVolumeClaim:
-          claimName: vchat-storage-pvc
+          claimName: vchat-storage-pvc
