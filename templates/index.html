@@ -114,6 +114,18 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             <button type="button" id="batch-submit-btn">Analyze Batch</button>
         </details>
 
+        <details class="advanced-options" style="margin-top: 1.5rem;">
+            <summary>Automated Dataset Labeling (via Gemini)</summary>
+            <p class="form-sub-label">Provide a video URL to automatically generate a labeled CSV data row using Gemini Vision. This requires a Gemini API key (see above).</p>
+            <form id="labeling-form">
+                <div class="form-group">
+                    <label for="labeling_video_url">Video URL for Labeling</label>
+                    <input type="url" id="labeling_video_url" name="labeling_video_url" value="https://twitter.com/someuser/status/12345" required>
+                </div>
+                <button type="submit" id="labeling-submit-btn">Generate Labeled Data Row</button>
+            </form>
+        </details>
+
 
         <div class="output-container">
             <h2>Single Video Log & Results</h2>
@@ -123,6 +135,11 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         <div class="output-container">
             <h2>Batch Processing Log</h2>
             <pre id="batch-output-log">Awaiting batch job...</pre>
+        </div>
+
+        <div class="output-container">
+            <h2>Labeling Log & Results</h2>
+            <pre id="labeling-output-log">Awaiting labeling job...</pre>
         </div>
     </div>
 
@@ -136,6 +153,11 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         const batchSubmitBtn = document.getElementById('batch-submit-btn');
         const batchOutputLog = document.getElementById('batch-output-log');
         const csvFileInput = document.getElementById('csv_file');
+
+        const labelingForm = document.getElementById('labeling-form');
+        const labelingSubmitBtn = document.getElementById('labeling-submit-btn');
+        const labelingOutputLog = document.getElementById('labeling-output-log');
+        const labelingVideoUrlInput = document.getElementById('labeling_video_url');
 
         const modelSelection = document.getElementById('model_selection');
         const geminiOptions = document.getElementById('gemini-options');
@@ -224,13 +246,13 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
                             lines[lines.length - 1] = data.replace(/\r/g, '');
                             logElement.textContent = lines.join('\n');
                         } else {
-                            logElement.textContent += data;
+                            logElement.textContent += data + '\n';
                         }
                         logElement.scrollTop = logElement.scrollHeight;
                     }
                 }
             }
-            logElement.textContent += '\n\n--- Stream finished ---';
+            logElement.textContent += '\n--- Stream finished ---';
         }
 
         form.addEventListener('submit', async (event) => {
@@ -300,6 +322,45 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             } finally {
                 batchSubmitBtn.disabled = false;
                 batchSubmitBtn.textContent = 'Analyze Batch';
+            }
+        });
+
+        labelingForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            
+            if (!geminiApiKeyInput.value) {
+                alert('Please enter a Gemini API Key to use the labeling feature. It can be found under the "Select Model" section.');
+                toggleGeminiOptions();
+                geminiApiKeyInput.focus();
+                return;
+            }
+
+            labelingSubmitBtn.disabled = true;
+            labelingSubmitBtn.textContent = 'Generating...';
+            labelingOutputLog.textContent = 'Initializing labeling request...';
+
+            const formData = new FormData();
+            formData.append('video_url', labelingVideoUrlInput.value);
+            formData.append('gemini_api_key', geminiApiKeyInput.value);
+            formData.append('gemini_model_name', geminiModelNameInput.value);
+
+            try {
+                const response = await fetch('/label_video', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server responded with status ${response.status}: ${errorText}`);
+                }
+                await handleStream(response, labelingOutputLog);
+            } catch (error) {
+                console.error('An error occurred during labeling:', error);
+                labelingOutputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nDetails: ${error.message}`;
+            } finally {
+                labelingSubmitBtn.disabled = false;
+                labelingSubmitBtn.textContent = 'Generate Labeled Data Row';
             }
         });
     </script>

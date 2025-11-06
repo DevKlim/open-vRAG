@@ -1,3 +1,4 @@
+# inference_logic.py
 import torch
 import re
 import ast
@@ -5,11 +6,15 @@ import sys
 import os
 import logging
 import asyncio
+import json
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
+from labeling_logic import LABELING_PROMPT_TEMPLATE
+
 try:
     import google.generativeai as genai
+    from google.generativeai.types import generation_types
 except ImportError:
     genai = None
 
@@ -266,3 +271,116 @@ async def run_gemini_pipeline(video_path: str, question: str, checks: dict, gemi
                 yield "Cleanup complete.\n"
             except Exception as e:
                 yield f"Warning: Could not clean up uploaded file {uploaded_file.name}. You may need to delete it manually from the Google AI Studio file manager. Details: {e}\n"
+
+async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict):
+    """
+    Runs the automated labeling pipeline using Gemini Pro Vision.
+    Yields progress updates and the final parsed JSON dictionary of labels.
+    """
+    if genai is None:
+        yield "ERROR: 'google-generativeai' package not installed. Please install it to use Gemini models.\n"
+        return
+
+    api_key = gemini_config.get("api_key")
+    model_name = gemini_config.get("model_name", "models/gemini-1.5-pro-latest")
+
+    if not api_key:
+        yield "ERROR: Gemini API Key is required.\n"
+        return
+
+    try:
+        yield "Configuring Google AI client..."
+        genai.configure(api_key=api_key)
+    except Exception as e:
+        yield f"ERROR: Failed to configure Google AI client. Check your API key. Details: {e}\n"
+        return
+
+    loop = asyncio.get_event_loop()
+    uploaded_file = None
+    try:
+        # 1. Upload the video file
+        yield f"Uploading video '{os.path.basename(video_path)}' to Google AI... (This may take a moment)"
+        uploaded_file = await loop.run_in_executor(None, lambda: genai.upload_file(path=video_path))
+        yield f"File uploaded. Waiting for Google to process it..."
+        
+        # 2. Poll for processing status
+        while uploaded_file.state.name == "PROCESSING":
+            yield "  - Processing...\r"
+            await asyncio.sleep(5)
+            uploaded_file = await loop.run_in_executor(None, lambda: genai.get_file(name=uploaded_file.name))
+
+        if uploaded_file.state.name != "ACTIVE":
+            yield f"ERROR: File processing failed. State: {uploaded_file.state.name}\n"
+            return
+        
+        yield "Video is processed and ready for analysis."
+        video_input = uploaded_file
+        
+        # 3. Generate content with the labeling prompt
+        model = genai.GenerativeModel(model_name)
+        yield "Constructing prompt for Gemini model..."
+        prompt_text = LABELING_PROMPT_TEMPLATE.format(caption=caption, transcript=transcript)
+        prompt = [prompt_text, video_input]
+        
+        yield "Sending request to Gemini for analysis and labeling..."
+        
+        # **FIX**: Add safety settings to be less restrictive and improve error handling
+        safety_settings = {
+            'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
+            'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
+            'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
+            'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'
+        }
+        
+        response = await loop.run_in_executor(
+            None, 
+            lambda: model.generate_content(
+                prompt,
+                request_options={'timeout': 600},
+                safety_settings=safety_settings
+            )
+        )
+        
+        # **FIX**: Add explicit check for safety blocking before trying to access .text
+        if not response.parts:
+            block_reason = "Unknown"
+            if response.prompt_feedback and response.prompt_feedback.block_reason:
+                block_reason = response.prompt_feedback.block_reason.name
+            yield f"\nERROR: The request was blocked by Gemini's safety filters. Reason: {block_reason}"
+            yield "This can happen when analyzing sensitive topics. The prompt and safety settings have been updated to minimize this, but it can still occur."
+            yield f"--- RAW FEEDBACK ---\n{response.prompt_feedback}\n------------------"
+            yield None # Indicate failure by yielding None
+            return # Stop execution for this pipeline
+
+        yield "Received response from Gemini. Parsing JSON..."
+        
+        try:
+            # Gemini sometimes wraps the JSON in ```json ... ```
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if not json_match:
+                raise json.JSONDecodeError("No JSON object found in response.", response.text, 0)
+            
+            json_str = json_match.group(0)
+            parsed_json = json.loads(json_str)
+            yield "Successfully parsed JSON labels."
+            yield f"--- PARSED LABELS ---\n{json.dumps(parsed_json, indent=2)}\n---------------------\n"
+            # Yield the parsed data as the final result for the calling function
+            yield parsed_json
+            
+        except (json.JSONDecodeError, AttributeError) as e:
+            yield f"ERROR: Could not parse JSON from Gemini's response. Details: {e}"
+            yield f"--- RAW RESPONSE ---\n{response.text}\n------------------"
+            yield None # Indicate failure
+
+    except Exception as e:
+        yield f"ERROR: An error occurred during the Gemini labeling process: {e}"
+        logger.error("Gemini labeling pipeline error", exc_info=True)
+    finally:
+        # 4. Clean up the uploaded file
+        if uploaded_file:
+            try:
+                yield "\nCleaning up uploaded file on Google AI..."
+                await loop.run_in_executor(None, lambda: genai.delete_file(name=uploaded_file.name))
+                yield "Cleanup complete."
+            except Exception as e:
+                yield f"Warning: Could not clean up file {uploaded_file.name}. You may need to delete it manually. Details: {e}"

@@ -6,6 +6,8 @@ from pathlib import Path
 import logging
 import csv
 import io
+import datetime
+import json
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
@@ -13,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 import yt_dlp
 import inference_logic
 import factuality_logic
+from factuality_logic import parse_vtt
+
 
 #  config application-wide logging 
 logging.basicConfig(
@@ -79,12 +83,13 @@ async def run_subprocess_async(command: list[str]):
 async def prepare_video_assets_async(url: str) -> dict:
     """
     Downloads video (if URL) or finds local video, then prepares assets.
-    Returns a dictionary of file paths.
+    Returns a dictionary of file paths and extracted metadata.
     """
     global progress_message
     loop = asyncio.get_event_loop()
     original_path = None
     transcript_path = None
+    metadata = {}
 
     is_local_file = not (url.startswith("http://") or url.startswith("https://"))
 
@@ -93,6 +98,14 @@ async def prepare_video_assets_async(url: str) -> dict:
         original_path = Path(url)
         if not original_path.exists():
             raise FileNotFoundError(f"Local video file not found at path: {url}")
+        metadata = {
+            "id": original_path.stem,
+            "url": url,
+            "caption": original_path.stem,
+            "likes": 0,
+            "shares": 0,
+            "post_time": "N/A"
+        }
     else: # It's a URL, download it
         progress_message = "starting video download...\r"
         ydl_opts = {
@@ -102,6 +115,8 @@ async def prepare_video_assets_async(url: str) -> dict:
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': ['en'],
+            'quiet': True,
+            'noplaylist': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
@@ -110,6 +125,19 @@ async def prepare_video_assets_async(url: str) -> dict:
             video_id = info.get("id")
             video_dir = Path("videos")
             transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
+            
+            # Extract metadata and clean caption
+            caption_text = info.get("description", info.get("title", "N/A"))
+            clean_caption = caption_text.encode('ascii', 'ignore').decode('ascii').strip()
+
+            metadata = {
+                "id": info.get("id", "N/A"),
+                "url": info.get("webpage_url", url),
+                "caption": clean_caption,
+                "likes": info.get("like_count", 0),
+                "shares": info.get("repost_count", 0),
+                "post_time": info.get("upload_date", "N/A"), # YYYYMMDD format
+            }
 
     progress_message = f"Cleaning video file: {original_path}\n"
     logging.info(f"Original video path: {original_path}")
@@ -137,6 +165,7 @@ async def prepare_video_assets_async(url: str) -> dict:
         "video": str(sanitized_path),
         "audio": str(audio_path) if audio_path and audio_path.exists() else None,
         "transcript": str(transcript_path) if transcript_path and transcript_path.exists() else None,
+        "metadata": metadata,
     }
 
 async def process_request_stream(video_url: str, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict, gemini_config: dict):
@@ -320,3 +349,109 @@ async def batch_process_endpoint(
         process_batch_stream(csv_file, question, generation_config, prompts, model_selection, checks, gemini_config),
         media_type="text/event-stream"
     )
+
+async def process_labeling_stream(video_url: str, gemini_config: dict):
+    """
+    Generator function that yields progress updates for the automated labeling process.
+    """
+    global progress_message
+    paths = None
+    try:
+        yield "data: Step 1: Preparing video assets (downloading, extracting metadata, etc.)...\n\n"
+        preparation_task = asyncio.create_task(prepare_video_assets_async(video_url))
+        while not preparation_task.done():
+            yield f"data: {progress_message}\n\n"
+            await asyncio.sleep(0.2)
+        yield f"data: {progress_message}\n\n"
+        paths = await preparation_task
+
+        video_path = paths.get("video")
+        transcript_path = paths.get("transcript")
+        metadata = paths.get("metadata", {})
+
+        if not video_path:
+            raise ValueError("Video file could not be prepared.")
+        
+        yield f"data: Step 2: Reading audio transcript...\n"
+        transcript_text = "No transcript available for this video."
+        if transcript_path and os.path.exists(transcript_path):
+            transcript_text = parse_vtt(transcript_path)
+            yield f"data:   - Transcript found and parsed.\n\n"
+        else:
+            yield f"data:   - No transcript file found. Proceeding without it.\n\n"
+        
+        caption = metadata.get("caption", "No caption available.")
+
+        yield "data: Step 3: Sending video, caption, and transcript to Gemini for labeling...\n\n"
+        
+        final_labels = None
+        async for message in inference_logic.run_gemini_labeling_pipeline(video_path, caption, transcript_text, gemini_config):
+            if isinstance(message, dict):
+                final_labels = message # This is the final parsed JSON
+            elif isinstance(message, str):
+                 yield f"data: {message.replace(os.linesep, ' ')}\n\n"
+
+        if final_labels is None:
+            raise RuntimeError("Failed to get parsed labels from the Gemini pipeline.")
+
+        yield "data: Step 4: Assembling final CSV data...\n\n"
+        
+        # Assemble the CSV row based on the spec
+        output_row = {
+            "id": metadata.get("id", ""),
+            "twitterlink": metadata.get("url", video_url),
+            "captions": caption,
+            "likes": metadata.get("likes", 0),
+            "shares": metadata.get("shares", 0),
+            "videocontext": "", # Per spec, this is empty
+            "videotranscriptionpath": transcript_path or "",
+            "posttime": metadata.get("post_time", ""),
+            "collecttime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            # Add the generated labels
+            "politicalbias": final_labels.get("political_bias", ""),
+            "misleading": final_labels.get("is_misleading", ""),
+            "criticism": final_labels.get("criticism_level", ""),
+            "videoaudiopairing": final_labels.get("video_audio_pairing", ""),
+            "videocaptionpairing": final_labels.get("video_caption_pairing", ""),
+            "audiocaptionparing": final_labels.get("audio_caption_pairing", "")
+        }
+
+        # Create a string buffer for the CSV output
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=output_row.keys())
+        writer.writeheader()
+        writer.writerow(output_row)
+        csv_output_string = output.getvalue()
+        
+        yield "data: --- FINAL CSV OUTPUT ---\n\n"
+        yield f"data: {csv_output_string.strip()}\n"
+        yield "data: \nLabeling process complete.\n"
+
+    except Exception as e:
+        error_message = f"\n\n ERROR: \nAn error occurred: {str(e)}"
+        logging.error(f"error in labeling stream for URL '{video_url}'", exc_info=True)
+        yield f"data: {error_message}\n\n"
+    finally:
+        pass
+
+@app.post("/label_video")
+async def label_video_endpoint(
+    video_url: str = Form(...),
+    gemini_api_key: str = Form(""),
+    gemini_model_name: str = Form(""),
+):
+    """Endpoint to handle the automated video labeling process."""
+    gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
+    
+    if not gemini_api_key:
+        async def error_stream():
+            yield "data: ERROR: Gemini API Key is required for the automated labeling feature. Please enter it in the 'Select Model' section.\n\n"
+            yield "event: close\ndata: Task finished.\n\n"
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+
+    async def stream_wrapper():
+        async for message in process_labeling_stream(video_url, gemini_config):
+            yield message
+        yield "event: close\ndata: Task finished.\n\n"
+
+    return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
