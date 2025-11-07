@@ -30,7 +30,7 @@ body {
     background-color: var(--container-bg-color);
     padding: 2rem 2.5rem;
     border-radius: 12px;
-    box-shadow: 0 8px G30px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
     width: 100%;
     max-width: 800px;
 }
@@ -80,6 +80,14 @@ h1 {
     margin-bottom: 0;
 }
 
+.form-group small {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.85rem;
+    color: var(--subtle-text-color);
+}
+
+
 label {
     display: block;
     font-weight: 500;
@@ -88,6 +96,7 @@ label {
 
 input[type="url"],
 input[type="number"],
+input[type="file"],
 textarea,
 select {
     width: 100%;
@@ -99,9 +108,19 @@ select {
     transition: border-color 0.2s, box-shadow 0.2s;
     background-color: #fff;
 }
+input[type="file"] {
+    padding: 0.5rem;
+}
+
+input[type="number"][readonly] {
+    background-color: #f1f3f5;
+    cursor: not-allowed;
+}
+
 
 input[type="url"]:focus,
 input[type="number"]:focus,
+input[type="file"]:focus,
 textarea:focus,
 select:focus {
     outline: none;
@@ -123,13 +142,18 @@ textarea {
 .advanced-options {
     border: 1px solid #e0e6ed;
     border-radius: 8px;
-    padding: 1rem;
+    padding: 1.25rem;
     margin-top: 1.5rem;
+    background-color: #fafbfc;
 }
 
 .advanced-options summary {
     font-weight: 500;
     cursor: pointer;
+    list-style: revert; /* Use default disclosure triangle */
+}
+.advanced-options summary:hover {
+    color: var(--primary-color);
 }
 
 .advanced-options[open] summary {
@@ -149,25 +173,27 @@ button {
     font-weight: 500;
     transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
     border: 1px solid transparent;
-}
-
-button[type="submit"] {
-    display: block;
     width: 100%;
     padding: 0.8rem 1rem;
     background-color: var(--primary-color);
     color: #fff;
-    border: none;
-    margin-top: 1.5rem;
 }
 
-button[type="submit"]:hover:not(:disabled) {
+button:hover:not(:disabled) {
     background-color: var(--primary-hover-color);
 }
 
-button[type="submit"]:disabled {
+button:disabled {
     background-color: #a0c3e8;
     cursor: not-allowed;
+}
+
+button[type="submit"] {
+    margin-top: 1.5rem;
+}
+
+button[type="button"] {
+    margin-top: 1rem;
 }
 
 .output-container {
@@ -181,7 +207,8 @@ h2 {
     margin-bottom: 1rem;
 }
 
-#output-log {
+#output-log,
+#batch-output-log {
     background-color: var(--code-bg-color);
     color: var(--code-text-color);
     padding: 1rem;
@@ -194,4 +221,58 @@ h2 {
     font-family: 'Menlo', 'Courier New', monospace;
     font-size: 0.9rem;
     line-height: 1.6;
+}
+
+/* New Factuality Styles */
+.form-sub-label {
+    font-size: 0.9rem;
+    color: var(--subtle-text-color);
+    margin-top: -1rem;
+    margin-bottom: 1.5rem;
+}
+
+#factuality-checks {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 0;
+}
+
+#factuality-checks legend {
+    font-weight: 500;
+    padding: 0 0.5rem;
+}
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.checkbox-group:last-child {
+    margin-bottom: 0;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: auto;
+    margin-right: 0.75rem;
+    height: 1.1em;
+    width: 1.1em;
+}
+.checkbox-group label {
+    margin-bottom: 0;
+    font-weight: 400;
+}
+
+.interval-input {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.interval-input span {
+    color: var(--subtle-text-color);
+}
+.interval-input input {
+    flex: 1;
+    min-width: 80px;
 }

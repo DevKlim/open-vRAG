@@ -4,7 +4,7 @@ import ast
 import os
 import sys
 import argparse
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from my_vision_process import process_vision_info, client
 
 # --- Prompt Definitions ---
@@ -35,7 +35,7 @@ def setup_model():
         print("flash-attn not installed. Falling back to 'sdpa' (PyTorch's native attention).")
         attn_implementation = "sdpa"
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="cuda", # Explicitly load the model on the GPU
@@ -61,7 +61,7 @@ def inference(video_path, prompt, model, processor, max_new_tokens=2048, client=
     ]
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True, client=client)
-    fps_inputs = video_kwargs['fps']
+    fps_inputs = video_kwargs['fps'][0]
     inputs = processor(text=[text], images=image_inputs, videos=video_inputs, fps=fps_inputs, padding=True, return_tensors="pt")
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 

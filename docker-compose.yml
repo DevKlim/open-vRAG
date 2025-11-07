@@ -2,20 +2,36 @@ services:
   videochat_webui:
     build: .
     container_name: videochat_webui
+    # The --reload flag tells uvicorn to automatically restart the server
+    # whenever it detects a code change in the mounted volume.
+    command: python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8005:8000"
     volumes:
-      # Mount the current directory for live code changes
+      # --- IMPORTANT FOR PERFORMANCE & PERSISTENCE ---
+      # The following volumes are crucial to avoid re-downloading large files (like models)
+      # every time you restart the container. Make sure these local directories exist in your `vChat` folder.
+
+      # Mount the current directory for live code changes in development
       - .:/app
-      # Mount a local directory to cache any other Hugging Face assets
+
+      # Mount a local directory to cache Hugging Face models and other assets.
+      # This prevents re-downloading multi-gigabyte models on every startup.
+      # ON YOUR HOST: Create a directory named `huggingface_cache` in this folder.
       - ./huggingface_cache:/root/.cache/huggingface
-      # Mount a local directory to store downloaded videos for the web UI
+
+      # Mount a local directory to store downloaded videos from the web UI.
       - ./videos:/app/videos
-      # Mount a local directory for datasets used by the official scripts
+
+      # Mount a local directory for datasets used by fine-tuning scripts.
       - ./data:/app/data
-      # OPTIONAL: If you have downloaded the model locally, mount its directory here to avoid re-downloading.
-      # The local path on the left MUST point to the folder containing the model's .safetensors files.
-      - ./VideoChat-R1:/app/local_model # <-- IMPORTANT: Update this path to match your local model folder's name.
+
+      # OPTIONAL BUT RECOMMENDED FOR STARTUP SPEED: Pre-download the model.
+      # 1. Download the model from Hugging Face: `git lfs install && git clone https://huggingface.co/OpenGVLab/VideoChat-R1_5`
+      # 2. Place the downloaded `VideoChat-R1_5` folder into this project's `vChat` directory.
+      # 3. Rename the folder from `VideoChat-R1_5` to `VideoChat-R1` to match the path below.
+      # The application will then load the model directly from this folder instead of downloading it.
+      - ./VideoChat-R1:/app/local_model # <-- This local folder `VideoChat-R1` will be mapped inside the container.
     deploy:
       resources:
         reservations:

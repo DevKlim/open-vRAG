@@ -1,13 +1,17 @@
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+from my_vision_process import process_vision_info
+import torch
+import re
+import ast
 
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from qwen_vl_utils import process_vision_info
-
+# Note: The model class has been updated to Qwen3VLForConditionalGeneration for consistency
+# with the main application and the latest transformers library conventions for this model.
 model_path = "OpenGVLab/VideoChat-R1_5"
 # default: Load the model on the available device(s)
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+model = Qwen3VLForConditionalGeneration.from_pretrained(
     model_path, torch_dtype="auto", device_map="auto",
     attn_implementation="flash_attention_2"
-)
+).eval()
 
 # default processer
 processor = AutoProcessor.from_pretrained(model_path)
@@ -31,7 +35,8 @@ Then, provide your answer within the <answer> </answer> tags, output the corresp
 """
 
 
-def inference(video_path, prompt, model, processor, max_new_tokens=2048, device="cuda:0", client = None, pred_glue=None):
+def inference(video_path, prompt, model, processor, max_new_tokens=2048, client=None, pred_glue=None):
+    device = model.device
     messages = [
         {"role": "user", "content": [
                 {"type": "video", 
@@ -46,41 +51,43 @@ def inference(video_path, prompt, model, processor, max_new_tokens=2048, device=
     ]
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True, client = client)
-    fps_inputs = video_kwargs['fps']
+    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True, client=client)
+    fps_inputs = video_kwargs['fps'][0]
 
     inputs = processor(text=[text], images=image_inputs, videos=video_inputs, fps=fps_inputs, padding=True, return_tensors="pt")
-    inputs = inputs.to(device)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
         output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True)
 
-    generated_ids = [output_ids[i][len(inputs.input_ids[i]):] for i in range(len(output_ids))]
+    generated_ids = [output_ids[i][len(inputs['input_ids'][i]):] for i in range(len(output_ids))]
     output_text = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
     return output_text[0]
 
 
-for percption in range(num_percptions):    
-            
-    if percption == num_percptions - 1:
-        example_prompt = QA_THINK.replace("[QUESTION]", item["problem"]["question"])
-    else:
-        example_prompt = QA_THINK_GLUE.replace("[QUESTION]", item["problem"]["question"])
+# This is example usage code. You should replace the placeholders.
+# For example:
+# item = {"problem": {"question": "What is the person doing in the video?"}}
+# client = None # Or initialize your client
+# pred_glue = None
+# answers = []
 
-    
-    ans = inference(video_path, example_prompt, model, processor, device=device, client=client, pred_glue=pred_glue)
+# for percption in range(num_percptions):    
+#     if percption == num_percptions - 1:
+#         example_prompt = QA_THINK.replace("[QUESTION]", item["problem"]["question"])
+#     else:
+#         example_prompt = QA_THINK_GLUE.replace("[QUESTION]", item["problem"]["question"])
 
-    pattern_glue = r'<glue>(.*?)</glue>'
-    match_glue = re.search(pattern_glue, ans, re.DOTALL)
-    # print(f'ann:{ans}')
-    answers.append(ans)
-    pred_glue = None
-    try:
-        if match_glue:
-            glue = match_glue.group(1)
-            pred_glue = ast.literal_eval(glue)
-        
-        
-    except Exception as e:
-        pred_glue = None
-print(ans)
+#     ans = inference(video_path, example_prompt, model, processor, client=client, pred_glue=pred_glue)
+
+#     pattern_glue = r'<glue>(.*?)</glue>'
+#     match_glue = re.search(pattern_glue, ans, re.DOTALL)
+#     answers.append(ans)
+#     pred_glue = None
+#     try:
+#         if match_glue:
+#             glue = match_glue.group(1)
+#             pred_glue = ast.literal_eval(glue)
+#     except Exception as e:
+#         pred_glue = None
+# print(ans)

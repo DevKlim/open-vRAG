@@ -11,7 +11,7 @@
         <div class="header">
              <h1>vChat: Ask Questions About Videos</h1>
         </div>
-        <p class="subtitle">Enter a video URL and a question to analyze its content.</p>
+        <p class="subtitle">Enter a video URL to analyze its content with a standard model, a fine-tuned model, or Google's Gemini.</p>
         
         <form id="vchat-form">
             <div class="form-grid">
@@ -21,8 +21,9 @@
                 </div>
                 <div class="form-group">
                     <label for="model_selection">Select Model</label>
-                    <select id="model_selection" name="model_selection" {% if not custom_model_available %}disabled{% endif %}>
+                    <select id="model_selection" name="model_selection">
                         <option value="default">Default Model</option>
+                        <option value="gemini">Gemini Pro Vision</option>
                         {% if custom_model_available %}
                         <option value="custom">Custom Fine-tuned</option>
                         {% endif %}
@@ -33,16 +34,60 @@
                 </div>
             </div>
 
+            <div id="gemini-options" class="advanced-options" style="display: none; background-color: #f0f4f8; margin-bottom: 1.5rem;">
+                 <div class="options-grid">
+                    <div class="form-group">
+                        <label for="gemini_api_key">Gemini API Key</label>
+                        <input type="password" id="gemini_api_key" name="gemini_api_key">
+                        <small>Can also be set via URL param `gemini_api_key`</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="gemini_model_name">Gemini Model Name</label>
+                        <input type="text" id="gemini_model_name" name="gemini_model_name" value="models/gemini-1.5-pro-latest">
+                        <small>Can also be set via URL param `gemini_model_name`</small>
+                    </div>
+                </div>
+            </div>
+
             <div class="form-group">
-                <label for="question">Your Question</label>
+                <label for="question">Your Question (for General Q&A)</label>
                 <textarea id="question" name="question" rows="3" required>What is the animal in the video doing?</textarea>
+                <small>This question is used for the standard Q&A. It is ignored if a factuality check is selected.</small>
             </div>
             
             <details class="advanced-options">
-                <summary>Advanced Configuration</summary>
+                <summary>Factuality & Credibility Analysis</summary>
+                <p class="form-sub-label">Run a series of automated checks on the video. If any box is checked, this will run instead of the general Q&A above.</p>
+                <fieldset id="factuality-checks">
+                    <legend>Select Checks to Perform:</legend>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="check_visuals" name="check_visuals" value="true">
+                        <label for="check_visuals">Visual Artifacts (AI, edits, watermarks)</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="check_content" name="check_content" value="true">
+                        <label for="check_content">Content Analysis (bias, clickbait, sourcing)</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="check_audio" name="check_audio" value="true">
+                        <label for="check_audio">Audio Anomaly Detection (cuts, transitions)</label>
+                    </div>
+                </fieldset>
+            </details>
+
+            <details class="advanced-options">
+                <summary>Advanced Configuration (for Default/Custom Models)</summary>
+                <div class="form-group">
+                    <label for="sampling_interval">Frame Sampling</label>
+                    <div class="interval-input">
+                        <span>Sample 1 frame every</span>
+                        <input type="number" id="sampling_interval" value="5" min="0.1" step="0.1">
+                        <span>seconds.</span>
+                    </div>
+                </div>
                 <div class="options-grid">
                     <div class="form-group"><label for="num_perceptions">Perception Iterations</label><input type="number" id="num_perceptions" name="num_perceptions" value="3" min="1" max="10"></div>
-                    <div class="form-group"><label for="sampling_fps">Sampling FPS</label><input type="number" id="sampling_fps" name="sampling_fps" value="2.0" min="0.1" max="30.0" step="0.1"></div>
+                    <div class="form-group"><label for="sampling_fps">Sampling FPS (auto-calculated)</label><input type="number" id="sampling_fps" name="sampling_fps" value="0.2" min="0.01" max="30.0" step="0.01" readonly></div>
                     <div class="form-group"><label for="max_new_tokens">Max New Tokens</label><input type="number" id="max_new_tokens" name="max_new_tokens" value="2048" min="1" step="64"></div>
                     <div class="form-group"><label for="temperature">Temperature</label><input type="number" id="temperature" name="temperature" value="0.7" min="0.0" max="2.0" step="0.1"></div>
                     <div class="form-group"><label for="top_p">Top-P</label><input type="number" id="top_p" name="top_p" value="0.9" min="0.0" max="1.0" step="0.05"></div>
@@ -55,12 +100,46 @@ Then, provide your answer within the <answer> </answer> tags. At the same time, 
 Output your think process within the <think> </think> tags.
 Then, provide your answer within the <answer> </answer> tags. For example: <think>...</think><answer>A</answer>.</textarea></div>
             </details>
-            <button type="submit" id="submit-btn">Analyze Video</button>
+
+            <button type="submit" id="submit-btn">Analyze Single Video</button>
         </form>
 
+        <details class="advanced-options" style="margin-top: 1.5rem;">
+            <summary>Batch Processing from CSV</summary>
+            <p class="form-sub-label">Upload a CSV file with a 'url' column to process multiple videos using the same settings defined above. The 'Video URL' field will be ignored.</p>
+            <div class="form-group">
+                <label for="csv_file">CSV File</label>
+                <input type="file" id="csv_file" name="csv_file" accept=".csv" required>
+            </div>
+            <button type="button" id="batch-submit-btn">Analyze Batch</button>
+        </details>
+
+        <details class="advanced-options" style="margin-top: 1.5rem;">
+            <summary>Automated Dataset Labeling (via Gemini)</summary>
+            <p class="form-sub-label">Provide a video URL to automatically generate a labeled CSV data row using Gemini Vision. This requires a Gemini API key (see above).</p>
+            <form id="labeling-form">
+                <div class="form-group">
+                    <label for="labeling_video_url">Video URL for Labeling</label>
+                    <input type="url" id="labeling_video_url" name="labeling_video_url" value="https://twitter.com/someuser/status/12345" required>
+                </div>
+                <button type="submit" id="labeling-submit-btn">Generate Labeled Data Row</button>
+            </form>
+        </details>
+
+
         <div class="output-container">
-            <h2>Processing Log & Results</h2>
+            <h2>Single Video Log & Results</h2>
             <pre id="output-log">Awaiting input...</pre>
+        </div>
+
+        <div class="output-container">
+            <h2>Batch Processing Log</h2>
+            <pre id="batch-output-log">Awaiting batch job...</pre>
+        </div>
+
+        <div class="output-container">
+            <h2>Labeling Log & Results</h2>
+            <pre id="labeling-output-log">Awaiting labeling job...</pre>
         </div>
     </div>
 
@@ -68,18 +147,113 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         const form = document.getElementById('vchat-form');
         const submitBtn = document.getElementById('submit-btn');
         const outputLog = document.getElementById('output-log');
+        const samplingIntervalInput = document.getElementById('sampling_interval');
+        const samplingFpsInput = document.getElementById('sampling_fps');
 
-        // --- NEW FIX ---
-        // Automatically open the advanced options if an input inside is invalid.
-        // This allows the browser to focus on the invalid field and show the error.
+        const batchSubmitBtn = document.getElementById('batch-submit-btn');
+        const batchOutputLog = document.getElementById('batch-output-log');
+        const csvFileInput = document.getElementById('csv_file');
+
+        const labelingForm = document.getElementById('labeling-form');
+        const labelingSubmitBtn = document.getElementById('labeling-submit-btn');
+        const labelingOutputLog = document.getElementById('labeling-output-log');
+        const labelingVideoUrlInput = document.getElementById('labeling_video_url');
+
+        const modelSelection = document.getElementById('model_selection');
+        const geminiOptions = document.getElementById('gemini-options');
+        const geminiApiKeyInput = document.getElementById('gemini_api_key');
+        const geminiModelNameInput = document.getElementById('gemini_model_name');
+
+        function updateFps() {
+            const interval = parseFloat(samplingIntervalInput.value);
+            if (interval > 0) {
+                const fps = 1 / interval;
+                samplingFpsInput.value = fps.toFixed(4);
+            }
+        }
+        
+        function toggleGeminiOptions() {
+            if (modelSelection.value === 'gemini') {
+                geminiOptions.style.display = 'block';
+                geminiApiKeyInput.required = true;
+            } else {
+                geminiOptions.style.display = 'none';
+                geminiApiKeyInput.required = false;
+            }
+        }
+
+        function readUrlParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const apiKey = urlParams.get('gemini_api_key');
+            const modelName = urlParams.get('gemini_model_name');
+
+            if (apiKey) {
+                geminiApiKeyInput.value = apiKey;
+                modelSelection.value = 'gemini';
+            }
+            if (modelName) {
+                geminiModelNameInput.value = modelName;
+            }
+            toggleGeminiOptions();
+        }
+
+        samplingIntervalInput.addEventListener('input', updateFps);
+        modelSelection.addEventListener('change', toggleGeminiOptions);
+        document.addEventListener('DOMContentLoaded', () => {
+            updateFps();
+            readUrlParams();
+        });
+
+
         form.addEventListener('invalid', (event) => {
             const invalidInput = event.target;
             const detailsParent = invalidInput.closest('details');
             if (detailsParent && !detailsParent.open) {
                 detailsParent.open = true;
             }
-        }, true); // Use the capture phase to catch the event early.
-        // --- END FIX ---
+             const geminiParent = invalidInput.closest('#gemini-options');
+            if (geminiParent && geminiParent.style.display === 'none') {
+                toggleGeminiOptions();
+            }
+        }, true);
+
+        async function handleStream(response, logElement) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            logElement.textContent = '';
+            let buffer = '';
+            let streamClosedByServer = false;
+
+            while (!streamClosedByServer) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                buffer += decoder.decode(value, { stream: true });
+                const messages = buffer.split('\n\n');
+                buffer = messages.pop() || ''; 
+
+                for (const message of messages) {
+                    if (!message) continue;
+                    if (message.startsWith('event: close')) {
+                        streamClosedByServer = true;
+                        break; 
+                    }
+
+                    if (message.startsWith('data:')) {
+                        let data = message.substring(5).trim();
+                        if (data.includes('\r')) {
+                            const lines = logElement.textContent.split('\n');
+                            lines[lines.length - 1] = data.replace(/\r/g, '');
+                            logElement.textContent = lines.join('\n');
+                        } else {
+                            logElement.textContent += data + '\n';
+                        }
+                        logElement.scrollTop = logElement.scrollHeight;
+                    }
+                }
+            }
+            logElement.textContent += '\n--- Stream finished ---';
+        }
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -91,9 +265,6 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             const formData = new FormData(form);
 
             try {
-                // For debugging: log the data being sent
-                console.log('Submitting form data:', Object.fromEntries(formData.entries()));
-
                 const response = await fetch('/process', {
                     method: 'POST',
                     body: formData,
@@ -101,67 +272,95 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error('Server error response:', errorText);
                     throw new Error(`Server responded with status ${response.status}: ${errorText}`);
                 }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                outputLog.textContent = ''; // Clear "Initializing..."
-                let buffer = '';
-                let streamClosedByServer = false;
-
-                while (!streamClosedByServer) {
-                    const { value, done } = await reader.read();
-                    if (done) {
-                        console.log('Reader has been closed.');
-                        break;
-                    }
-                    
-                    buffer += decoder.decode(value, { stream: true });
-                    
-                    const messages = buffer.split('\n\n');
-                    // The last element might be an incomplete message, so we keep it in the buffer.
-                    buffer = messages.pop() || ''; 
-
-                    for (const message of messages) {
-                        if (!message) continue;
-
-                        console.log("Received raw message:", JSON.stringify(message));
-
-                        if (message.startsWith('event: close')) {
-                            console.log('Server sent close event. Terminating stream processing.');
-                            streamClosedByServer = true;
-                            break; 
-                        }
-
-                        if (message.startsWith('data:')) {
-                            let data = message.substring(5).trim();
-                            
-                            // Handle carriage return for progress updates on the same line
-                            if (data.includes('\r')) {
-                                const lines = outputLog.textContent.split('\n');
-                                lines[lines.length - 1] = data.replace(/\r/g, '');
-                                outputLog.textContent = lines.join('\n');
-                            } else {
-                                outputLog.textContent += data;
-                            }
-                            // Auto-scroll to the bottom
-                            outputLog.scrollTop = outputLog.scrollHeight;
-                        }
-                    }
-                }
-
-                outputLog.textContent += '\n\n--- Stream finished ---';
-                console.log('Stream processing finished successfully.');
-
+                await handleStream(response, outputLog);
             } catch (error) {
-                console.error('An error occurred during the process:', error);
-                // Ensure the error message is clearly visible to the user in the log.
-                outputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nAn error occurred while processing the request.\nDetails: ${error.message}`;
+                console.error('An error occurred during single processing:', error);
+                outputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nDetails: ${error.message}`;
             } finally {
                 submitBtn.disabled = false;
-                submitBtn.textContent = 'Analyze Video';
+                submitBtn.textContent = 'Analyze Single Video';
+            }
+        });
+
+        batchSubmitBtn.addEventListener('click', async () => {
+            if (!csvFileInput.files || csvFileInput.files.length === 0) {
+                alert('Please select a CSV file to upload.');
+                return;
+            }
+            if (modelSelection.value === 'gemini' && !geminiApiKeyInput.value) {
+                alert('Please enter a Gemini API Key to run a batch job with Gemini.');
+                toggleGeminiOptions();
+                geminiApiKeyInput.focus();
+                return;
+            }
+
+            batchSubmitBtn.disabled = true;
+            batchSubmitBtn.textContent = 'Processing Batch...';
+            batchOutputLog.textContent = 'Initializing batch request...';
+
+            // Use the main form to get all settings, then add the file
+            const formData = new FormData(form);
+            formData.append('csv_file', csvFileInput.files[0]);
+
+            try {
+                const response = await fetch('/batch_process', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server responded with status ${response.status}: ${errorText}`);
+                }
+                await handleStream(response, batchOutputLog);
+
+            } catch (error) {
+                console.error('An error occurred during batch processing:', error);
+                batchOutputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nDetails: ${error.message}`;
+            } finally {
+                batchSubmitBtn.disabled = false;
+                batchSubmitBtn.textContent = 'Analyze Batch';
+            }
+        });
+
+        labelingForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            
+            if (!geminiApiKeyInput.value) {
+                alert('Please enter a Gemini API Key to use the labeling feature. It can be found under the "Select Model" section.');
+                toggleGeminiOptions();
+                geminiApiKeyInput.focus();
+                return;
+            }
+
+            labelingSubmitBtn.disabled = true;
+            labelingSubmitBtn.textContent = 'Generating...';
+            labelingOutputLog.textContent = 'Initializing labeling request...';
+
+            const formData = new FormData();
+            formData.append('video_url', labelingVideoUrlInput.value);
+            formData.append('gemini_api_key', geminiApiKeyInput.value);
+            formData.append('gemini_model_name', geminiModelNameInput.value);
+
+            try {
+                const response = await fetch('/label_video', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server responded with status ${response.status}: ${errorText}`);
+                }
+                await handleStream(response, labelingOutputLog);
+            } catch (error) {
+                console.error('An error occurred during labeling:', error);
+                labelingOutputLog.textContent += `\n\n[CLIENT-SIDE ERROR]\nDetails: ${error.message}`;
+            } finally {
+                labelingSubmitBtn.disabled = false;
+                labelingSubmitBtn.textContent = 'Generate Labeled Data Row';
             }
         });
     </script>
