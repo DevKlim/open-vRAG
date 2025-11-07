@@ -4,7 +4,7 @@ import ast
 import sys
 import os
 import logging
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import QwenX_VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
 
@@ -52,7 +52,7 @@ def load_models():
 
     # Load the base model
     logger.info(f"Loading base model from {model_path}...")
-    base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    base_model = QwenX_VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map="auto",
