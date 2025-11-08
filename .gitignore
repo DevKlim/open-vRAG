@@ -1,3 +1,32 @@
+# .dockerignore
+# vChat/.dockerignore
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore local virtual environment
+venv/
+.venv/
+
+# Ignore local package caches/build artifacts
+.pytest_cache/
+.eggs/
+dist/
+build/
+
+# Ignore local settings
+.env
+
+# Ignore git files
+.git/
+.gitignore
+
+# Ignore downloaded videos and model cache from the build context
+# These will be handled by Docker volumes at runtime.
+videos/
+huggingface_cache/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.pyc
@@ -25,7 +54,7 @@ huggingface_cache/
 
 # Ignore the directory where a local copy of the base model might be stored
 # (as referenced in docker-compose.yml)
-VideoChat-R1/
+model/
 local_model/
 
 # Ignore the user's custom dataset directory
@@ -52,3 +81,4 @@ htmlcov/
 # OS-specific files
 .DS_Store
 Thumbs.db
+

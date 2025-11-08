@@ -35,3 +35,9 @@ bitsandbytes
 trl
 # For loading datasets
 datasets
+
+# --- Metadata Generation ---
+croissant
+
+# --- Audio Transcription ---
+openai-whisper

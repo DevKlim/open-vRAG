@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 import yt_dlp
 import inference_logic
 import factuality_logic
+# import transcription
 from factuality_logic import parse_vtt
 
 
@@ -31,6 +32,9 @@ templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 os.makedirs("videos", exist_ok=True)
+os.makedirs("data", exist_ok=True) # Ensure the data directory for the CSV exists
+os.makedirs("metadata", exist_ok=True) # Ensure the metadata directory exists
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -38,6 +42,7 @@ async def startup_event():
     logging.info("Application starting up...")
     try:
         inference_logic.load_models()
+        # transcription.load_model()
     except Exception as e:
         logging.fatal(f"Could not load models. Error: {e}", exc_info=True)
 
@@ -82,7 +87,7 @@ async def run_subprocess_async(command: list[str]):
 
 async def prepare_video_assets_async(url: str) -> dict:
     """
-    Downloads video (if URL) or finds local video, then prepares assets.
+    Downloads video (if URL) or finds local video, then prepares assets including transcription.
     Returns a dictionary of file paths and extracted metadata.
     """
     global progress_message
@@ -90,6 +95,7 @@ async def prepare_video_assets_async(url: str) -> dict:
     original_path = None
     transcript_path = None
     metadata = {}
+    audio_path_str = None
 
     is_local_file = not (url.startswith("http://") or url.startswith("https://"))
 
@@ -124,7 +130,9 @@ async def prepare_video_assets_async(url: str) -> dict:
             original_path = Path(original_filepath_str)
             video_id = info.get("id")
             video_dir = Path("videos")
-            transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
+            transcript_path = next(video_dir.glob(f"{video_id}*.en.vtt"), None)
+            if not transcript_path:
+                 transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
             
             # Extract metadata and clean caption
             caption_text = info.get("description", info.get("title", "N/A"))
@@ -158,13 +166,33 @@ async def prepare_video_assets_async(url: str) -> dict:
     ]
     await run_subprocess_async(ffmpeg_audio_command)
     progress_message = "Audio extracted successfully.\n"
+    audio_path_str = str(audio_path)
 
-    logging.info(f"Assets prepared: Video='{sanitized_path}', Audio='{audio_path}', Transcript='{transcript_path}'")
+    # # --- New Transcription Logic ---
+    # if not transcript_path or not Path(transcript_path).exists():
+    #     progress_message = "No pre-existing transcript found. Generating one locally (this may take a moment)...\n"
+    #     logging.info(progress_message)
+    #     if audio_path_str and Path(audio_path_str).exists():
+    #         generated_vtt_path = await loop.run_in_executor(
+    #             None, transcription.generate_transcript, audio_path_str
+    #         )
+    #         if generated_vtt_path:
+    #             transcript_path = generated_vtt_path
+    #             progress_message = "Local transcription successful.\n"
+    #         else:
+    #             progress_message = "Local transcription failed.\n"
+    #     else:
+    #         progress_message = "Audio file not found, skipping transcription.\n"
+    # else:
+    #     progress_message = "Using pre-existing transcript file.\n"
+    #     logging.info(f"Found existing transcript at {transcript_path}")
+    
+    logging.info(f"Assets prepared: Video='{sanitized_path}', Audio='{audio_path_str}', Transcript='{transcript_path}'")
     
     return {
         "video": str(sanitized_path),
-        "audio": str(audio_path) if audio_path and audio_path.exists() else None,
-        "transcript": str(transcript_path) if transcript_path and transcript_path.exists() else None,
+        "audio": audio_path_str if audio_path and audio_path.exists() else None,
+        "transcript": str(transcript_path) if transcript_path and Path(transcript_path).exists() else None,
         "metadata": metadata,
     }
 
@@ -396,18 +424,17 @@ async def process_labeling_stream(video_url: str, gemini_config: dict):
 
         yield "data: Step 4: Assembling final CSV data...\n\n"
         
-        # Assemble the CSV row based on the spec
-        output_row = {
+        # Assemble the CSV row data (without metadata path yet)
+        output_row_data = {
             "id": metadata.get("id", ""),
             "twitterlink": metadata.get("url", video_url),
             "captions": caption,
             "likes": metadata.get("likes", 0),
             "shares": metadata.get("shares", 0),
-            "videocontext": "", # Per spec, this is empty
+            "videocontext": final_labels.get("video_context_summary", "Context not generated."),
             "videotranscriptionpath": transcript_path or "",
             "posttime": metadata.get("post_time", ""),
             "collecttime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            # Add the generated labels
             "politicalbias": final_labels.get("political_bias", ""),
             "misleading": final_labels.get("is_misleading", ""),
             "criticism": final_labels.get("criticism_level", ""),
@@ -416,6 +443,73 @@ async def process_labeling_stream(video_url: str, gemini_config: dict):
             "audiocaptionparing": final_labels.get("audio_caption_pairing", "")
         }
 
+        # --- Generate and save Croissant metadata ---
+        yield "data: Step 4.5: Generating and saving Croissant-ml metadata...\n\n"
+        metadatapath_value = ""
+        try:
+            import croissant as cr
+
+            fields = [
+                cr.Field(name="id", description="Unique identifier for the video.", data_types=cr.DataType.TEXT),
+                cr.Field(name="twitterlink", description="URL to the original social media post.", data_types=cr.DataType.URL),
+                cr.Field(name="captions", description="Original user-provided caption for the video.", data_types=cr.DataType.TEXT),
+                cr.Field(name="likes", description="Number of likes for the post.", data_types=cr.DataType.INTEGER),
+                cr.Field(name="shares", description="Number of shares/reposts for the post.", data_types=cr.DataType.INTEGER),
+                cr.Field(name="videocontext", description="A brief, AI-generated summary of the video's content.", data_types=cr.DataType.TEXT),
+                cr.Field(name="videotranscriptionpath", description="Path to the VTT transcript file.", data_types=cr.DataType.TEXT),
+                cr.Field(name="posttime", description="Original post time of the video.", data_types=cr.DataType.TEXT),
+                cr.Field(name="collecttime", description="Timestamp when the data was collected and labeled.", data_types=cr.DataType.TEXT),
+                cr.Field(name="politicalbias", description="AI-generated score for political bias (1-10).", data_types=cr.DataType.INTEGER),
+                cr.Field(name="misleading", description="AI-generated boolean for misleading content.", data_types=cr.DataType.BOOL),
+                cr.Field(name="criticism", description="AI-generated score for criticism level (1-10).", data_types=cr.DataType.INTEGER),
+                cr.Field(name="videoaudiopairing", description="AI-generated score for video-audio pairing (1-10).", data_types=cr.DataType.INTEGER),
+                cr.Field(name="videocaptionpairing", description="AI-generated score for video-caption pairing (1-10).", data_types=cr.DataType.INTEGER),
+                cr.Field(name="audiocaptionparing", description="AI-generated score for audio-caption pairing (1-10).", data_types=cr.DataType.INTEGER),
+            ]
+            
+            temp_csv = io.StringIO()
+            temp_writer = csv.DictWriter(temp_csv, fieldnames=output_row_data.keys())
+            temp_writer.writeheader()
+            temp_writer.writerow(output_row_data)
+
+            record_set = cr.RecordSet(
+                name="videoLabel",
+                description="A single set of labels and metadata for one social media video.",
+                fields=fields,
+                data=temp_csv.getvalue()
+            )
+
+            video_id = metadata.get('id', 'unknown_video')
+            timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+            
+            croissant_metadata = cr.Metadata(
+                name=f"vchat-label-{video_id}",
+                description=f"Croissant metadata for video ID {video_id} generated on {timestamp}.",
+                url=f"http://vchat-dataset.org/metadata/{video_id}/{timestamp}",
+                record_sets=[record_set],
+            )
+
+            metadata_dir = Path("metadata")
+            metadata_filename = f"{video_id}_{timestamp}.json"
+            metadata_path = metadata_dir / metadata_filename
+            
+            with open(metadata_path, "w") as f:
+                json.dump(croissant_metadata.to_json(), f, indent=2)
+            
+            metadatapath_value = str(metadata_path)
+            yield f"data:   - Croissant metadata successfully saved to {metadatapath_value}\n\n"
+
+        except ImportError:
+            metadatapath_value = "N/A (croissant library not installed)"
+            yield "data: WARNING: 'croissant' library not installed. Skipping metadata generation.\n\n"
+        except Exception as e:
+            metadatapath_value = f"Error generating metadata: {e}"
+            yield f"data: ERROR: Failed to generate or save Croissant metadata: {e}\n\n"
+            logging.error("Failed to generate Croissant metadata", exc_info=True)
+        
+        output_row = output_row_data.copy()
+        output_row["metadatapath"] = metadatapath_value
+
         # Create a string buffer for the CSV output
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=output_row.keys())
@@ -423,8 +517,23 @@ async def process_labeling_stream(video_url: str, gemini_config: dict):
         writer.writerow(output_row)
         csv_output_string = output.getvalue()
         
-        yield "data: --- FINAL CSV OUTPUT ---\n\n"
-        yield f"data: {csv_output_string.strip()}\n"
+        yield "data: --- FINAL CSV OUTPUT (for display) ---\n\n"
+        yield f"data: {csv_output_string.strip()}\n\n"
+
+        # Step 5: Append to the physical CSV file
+        dataset_path = Path("data/dataset.csv")
+        yield f"data: Step 5: Appending data to local file at {dataset_path}...\n\n"
+        
+        file_exists = dataset_path.is_file()
+        is_empty = not file_exists or dataset_path.stat().st_size == 0
+        
+        with open(dataset_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=output_row.keys())
+            if is_empty:
+                writer.writeheader()
+            writer.writerow(output_row)
+        
+        yield f"data: Successfully appended row to {dataset_path}.\n"
         yield "data: \nLabeling process complete.\n"
 
     except Exception as e:

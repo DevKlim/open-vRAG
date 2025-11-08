@@ -1,3 +1,4 @@
+# .dockerignore
 # vChat/.dockerignore
 # Ignore Python cache
 __pycache__/

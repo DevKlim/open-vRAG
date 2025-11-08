@@ -1,4 +1,5 @@
 # inference_logic.py
+# inference_logic.py
 import torch
 import re
 import ast
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 def load_models():
     """
     Loads the base model and, if LoRA adapters exist, the fine-tuned PEFT model.
-    Checks for a local model copy first before downloading from Hugging Face Hub.
+    This function now REQUIRES the model to be pre-downloaded in the '/app/local_model' directory.
     """
     global processor, base_model, peft_model, active_model
     if base_model is not None:
@@ -45,10 +46,14 @@ def load_models():
     local_model_path = "/app/local_model"
     if os.path.exists(local_model_path) and os.listdir(local_model_path):
         model_path = local_model_path
-        logger.info(f"Found non-empty local model directory at '{model_path}'. Attempting to load from local files.")
+        logger.info(f"Found local model directory at '{model_path}'. Loading from local files.")
     else:
-        model_path = "OpenGVLab/VideoChat-R1_5"
-        logger.info(f"Local model directory '{local_model_path}' not found or is empty. Will download from Hugging Face Hub.")
+        # The application will not download the model anymore. It must be provided.
+        error_msg = f"FATAL: Local model not found at '{local_model_path}'. " \
+                    "Please download the 'OpenGVLab/VideoChat-R1_5' model and mount it into the container. " \
+                    "See the README.md for instructions."
+        logger.fatal(error_msg)
+        raise RuntimeError(error_msg)
     
     try:
         import flash_attn

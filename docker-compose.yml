@@ -1,3 +1,4 @@
+# docker-compose.yml
 services:
   videochat_webui:
     build: .
@@ -10,7 +11,7 @@ services:
     volumes:
       # --- IMPORTANT FOR PERFORMANCE & PERSISTENCE ---
       # The following volumes are crucial to avoid re-downloading large files (like models)
-      # every time you restart the container. Make sure these local directories exist in your `vChat` folder.
+      # every time you restart the container. Make sure these local directories exist.
 
       # Mount the current directory for live code changes in development
       - .:/app
@@ -27,11 +28,10 @@ services:
       - ./data:/app/data
 
       # OPTIONAL BUT RECOMMENDED FOR STARTUP SPEED: Pre-download the model.
-      # 1. Download the model from Hugging Face: `git lfs install && git clone https://huggingface.co/OpenGVLab/VideoChat-R1_5`
-      # 2. Place the downloaded `VideoChat-R1_5` folder into this project's `vChat` directory.
-      # 3. Rename the folder from `VideoChat-R1_5` to `VideoChat-R1` to match the path below.
+      # 1. Download the model: `git lfs install && git clone https://huggingface.co/OpenGVLab/VideoChat-R1_5`
+      # 2. Rename the downloaded `VideoChat-R1_5` folder to `model` and place it in this project's root directory.
       # The application will then load the model directly from this folder instead of downloading it.
-      - ./VideoChat-R1:/app/local_model # <-- This local folder `VideoChat-R1` will be mapped inside the container.
+      - ./model:/app/local_model # This maps your local `model` folder into the container.
     deploy:
       resources:
         reservations:
