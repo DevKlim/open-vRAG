@@ -1,5 +1,3 @@
-# inference_logic.py
-# inference_logic.py
 import torch
 import re
 import ast
@@ -11,7 +9,10 @@ import json
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
-from labeling_logic import LABELING_PROMPT_TEMPLATE
+from labeling_logic import (
+    LABELING_PROMPT_TEMPLATE, SCORE_INSTRUCTIONS_SIMPLE, SCORE_INSTRUCTIONS_REASONING,
+    EXAMPLE_JSON_SIMPLE, EXAMPLE_JSON_REASONING
+)
 
 try:
     import google.generativeai as genai
@@ -355,7 +356,7 @@ async def run_vertex_pipeline(video_path: str, question: str, checks: dict, vert
         logger.error("Vertex AI pipeline error", exc_info=True)
 
 
-async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict):
+async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict, include_comments: bool):
     """
     Runs the automated labeling pipeline using Google AI Studio.
     Yields progress updates and the final parsed JSON dictionary of labels.
@@ -398,8 +399,22 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
         
         model = genai.GenerativeModel(model_name)
         yield "Constructing prompt for Google AI Studio model..."
-        prompt_text = LABELING_PROMPT_TEMPLATE.format(caption=caption, transcript=transcript)
         
+        if include_comments:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_REASONING,
+                example_json=EXAMPLE_JSON_REASONING
+            )
+        else:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_SIMPLE,
+                example_json=EXAMPLE_JSON_SIMPLE
+            )
+
         yield "Sending request to Google AI Studio for analysis and labeling..."
         
         safety_settings = {
@@ -446,7 +461,7 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
             except Exception as e:
                 yield f"Warning: Could not clean up file {uploaded_file.name}. You may need to delete it manually. Details: {e}"
 
-async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript: str, vertex_config: dict):
+async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript: str, vertex_config: dict, include_comments: bool):
     """
     Runs the automated labeling pipeline using a Vertex AI model.
     Yields progress updates and the final parsed JSON dictionary of labels.
@@ -485,7 +500,20 @@ async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript
         yield "Video data prepared for Vertex AI."
 
         yield "Constructing prompt for Vertex AI model..."
-        prompt_text = LABELING_PROMPT_TEMPLATE.format(caption=caption, transcript=transcript)
+        if include_comments:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_REASONING,
+                example_json=EXAMPLE_JSON_REASONING
+            )
+        else:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_SIMPLE,
+                example_json=EXAMPLE_JSON_SIMPLE
+            )
         contents = [video_part, prompt_text]
         
         yield "Sending request to Vertex AI for analysis and labeling..."

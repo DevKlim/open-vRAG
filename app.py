@@ -45,6 +45,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 os.makedirs("videos", exist_ok=True)
 os.makedirs("data", exist_ok=True) # Ensure the data directory for the CSV exists
+os.makedirs("data/labels", exist_ok=True) # Ensure the directory for JSON labels exists
 os.makedirs("metadata", exist_ok=True) # Ensure the metadata directory exists
 
 
@@ -384,7 +385,7 @@ async def generate_and_save_croissant_metadata(row_data: dict) -> str:
         logging.error(f"Failed to generate or save Croissant metadata: {e}", exc_info=True)
         return f"Error generating metadata: {e}"
 
-async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str):
+async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
     """
     Prepares a video, gets labels, and returns a dictionary of results with standardized keys.
     """
@@ -417,22 +418,26 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
         
         final_labels = None
         if model_selection == 'gemini':
-            async for message in inference_logic.run_gemini_labeling_pipeline(video_path, caption, transcript_text, gemini_config):
+            async for message in inference_logic.run_gemini_labeling_pipeline(video_path, caption, transcript_text, gemini_config, include_comments):
                 if isinstance(message, dict): final_labels = message
                 elif isinstance(message, str): yield message.replace(os.linesep, ' ')
         elif model_selection == 'vertex':
-            async for message in inference_logic.run_vertex_labeling_pipeline(video_path, caption, transcript_text, vertex_config):
+            async for message in inference_logic.run_vertex_labeling_pipeline(video_path, caption, transcript_text, vertex_config, include_comments):
                 if isinstance(message, dict): final_labels = message
                 elif isinstance(message, str): yield message.replace(os.linesep, ' ')
 
         if final_labels is None:
             raise RuntimeError(f"Failed to get parsed labels from the {model_selection.capitalize()} pipeline.")
 
-        # Flatten the nested disinformation analysis for CSV storage
+        def get_score(value):
+            """Safely extracts the score, whether it's a direct value or in a nested dict."""
+            if isinstance(value, dict):
+                return value.get('score', '')
+            return value
+
         disinfo_analysis = final_labels.get("disinformation_analysis", {})
         sentiment_tactics = disinfo_analysis.get("sentiment_and_bias_tactics", {})
 
-        # Assemble the final row data with standardized keys
         output_row_data = {
             "id": metadata.get("id", ""),
             "link": metadata.get("link", video_url),
@@ -443,13 +448,12 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             "collecttime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "videotranscriptionpath": transcript_path or "",
             "videocontext": final_labels.get("video_context_summary", ""),
-            "politicalbias": final_labels.get("political_bias", ""),
-            "criticism": final_labels.get("criticism_level", ""),
-            "videoaudiopairing": final_labels.get("video_audio_pairing", ""),
-            "videocaptionpairing": final_labels.get("video_caption_pairing", ""),
-            "audiocaptionpairing": final_labels.get("audio_caption_pairing", ""),
+            "politicalbias": get_score(final_labels.get("political_bias", "")),
+            "criticism": get_score(final_labels.get("criticism_level", "")),
+            "videoaudiopairing": get_score(final_labels.get("video_audio_pairing", "")),
+            "videocaptionpairing": get_score(final_labels.get("video_caption_pairing", "")),
+            "audiocaptionpairing": get_score(final_labels.get("audio_caption_pairing", "")),
             
-            # New flattened disinformation fields
             "disinfo_level": disinfo_analysis.get("disinformation_level", ""),
             "disinfo_intent": disinfo_analysis.get("disinformation_intent", ""),
             "disinfo_threat_vector": disinfo_analysis.get("threat_vector", ""),
@@ -457,31 +461,46 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             "disinfo_targets_cognitive_bias": sentiment_tactics.get("targets_cognitive_bias", ""),
             "disinfo_promotes_tribalism": sentiment_tactics.get("promotes_tribalism", "")
         }
-        yield output_row_data
+        
+        yield {"csv_row": output_row_data, "full_json": final_labels}
 
     except Exception as e:
         error_message = f"ERROR in get_labels_for_link for {video_url}: {str(e)}"
         logging.error(error_message, exc_info=True)
         yield {"error": error_message}
 
-async def process_labeling_stream(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str):
+async def process_labeling_stream(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
     """
     Generator function for the automated labeling of a SINGLE video, appending to dataset.csv.
     """
-    final_row_data = None
-    async for result in get_labels_for_link(video_url, gemini_config, vertex_config, model_selection):
+    final_data = None
+    async for result in get_labels_for_link(video_url, gemini_config, vertex_config, model_selection, include_comments):
         if isinstance(result, str):
             yield f"data: {result}\n\n"
         elif isinstance(result, dict):
-            final_row_data = result
+            if "error" in result:
+                yield f"data: ERROR: {result['error']}\n\n"
+                return
+            final_data = result
 
-    if not final_row_data or "error" in final_row_data:
-        error_msg = (final_row_data or {}).get('error', 'Could not generate label data.')
-        yield f"data: ERROR: {error_msg}\n\n"
+    if not final_data or "csv_row" not in final_data:
+        yield f"data: ERROR: Could not generate label data.\n\n"
         return
-
-    yield "data: Step 4: Generating metadata...\n\n"
     
+    final_row_data = final_data["csv_row"]
+    full_labels_json = final_data["full_json"]
+    
+    # Save the full JSON analysis to its own file
+    labels_dir = Path("data/labels")
+    video_id = final_row_data.get('id', 'unknown_video')
+    timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+    json_filename = f"{video_id}_{timestamp}_labels.json"
+    json_path = labels_dir / json_filename
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(full_labels_json, f, indent=2, ensure_ascii=False)
+    yield f"data: Step 4: Full analysis with reasoning saved to {json_path}\n\n"
+
+    yield "data: Step 5: Generating metadata...\n\n"
     metadatapath_value = await generate_and_save_croissant_metadata(final_row_data)
     final_row_data["metadatapath"] = metadatapath_value
     if "Error" in metadatapath_value:
@@ -490,9 +509,8 @@ async def process_labeling_stream(video_url: str, gemini_config: dict, vertex_co
         yield f"data:   - Croissant metadata successfully saved to {metadatapath_value}\n\n"
 
     dataset_path = Path("data/dataset.csv")
-    yield f"data: Step 5: Appending data to persistent dataset at {dataset_path}...\n\n"
+    yield f"data: Step 6: Appending data to persistent dataset at {dataset_path}...\n\n"
     
-    # Define all possible headers to ensure consistency
     all_headers = list(dict.fromkeys(list(final_row_data.keys()) + ["metadatapath"]))
     
     file_exists = dataset_path.is_file() and dataset_path.stat().st_size > 0
@@ -516,6 +534,7 @@ async def label_video_endpoint(
     vertex_location: str = Form(""),
     vertex_model_name: str = Form(""),
     vertex_api_key: str = Form(""),
+    include_comments: bool = Form(False),
 ):
     """Endpoint to handle the automated video labeling process for a single video."""
     gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
@@ -534,14 +553,14 @@ async def label_video_endpoint(
 
 
     async def stream_wrapper():
-        async for message in process_labeling_stream(video_url, gemini_config, vertex_config, model_selection):
+        async for message in process_labeling_stream(video_url, gemini_config, vertex_config, model_selection, include_comments):
             yield message
         yield "event: close\ndata: Task finished.\n\n"
 
     return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
 
 
-async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dict, vertex_config: dict, model_selection: str):
+async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
     """
     Processes a CSV, appends new, labeled data to a persistent `data/dataset.csv`,
     and generates metadata. Skips links that are already processed.
@@ -575,7 +594,6 @@ async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dic
         
         input_rows = [row for row in reader if row.get('link')]
         
-        # Define the full set of columns for the output file
         label_columns = [
             "id", "link", "caption", "likes", "shares", "postdatetime", "collecttime", 
             "videotranscriptionpath", "videocontext", "politicalbias", "criticism", 
@@ -598,17 +616,28 @@ async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dic
                 yield f"data:   -> SKIPPING: This link has already been processed in dataset.csv.\n\n"
                 continue
 
-            label_dict = None
-            async for result in get_labels_for_link(link, gemini_config, vertex_config, model_selection):
+            label_data_packet = None
+            async for result in get_labels_for_link(link, gemini_config, vertex_config, model_selection, include_comments):
                 if isinstance(result, str):
                     yield f"data:   {result}\n"
                 elif isinstance(result, dict):
-                    label_dict = result
+                    label_data_packet = result
             
-            if label_dict and "error" not in label_dict:
+            if label_data_packet and "error" not in label_data_packet:
+                csv_row = label_data_packet["csv_row"]
+                full_labels_json = label_data_packet["full_json"]
                 full_row_data = row.copy()
-                full_row_data.update(label_dict)
+                full_row_data.update(csv_row)
                 yield f"data: \n  -> Successfully generated labels for {link}.\n"
+                
+                labels_dir = Path("data/labels")
+                video_id = csv_row.get('id', f'unknown_batch_{i+1}')
+                timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+                json_filename = f"{video_id}_{timestamp}_labels.json"
+                json_path = labels_dir / json_filename
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(full_labels_json, f, indent=2, ensure_ascii=False)
+                yield f"data:   -> Full analysis with reasoning saved to {json_path}\n"
                 
                 yield f"data:   -> Generating Croissant metadata...\n"
                 metadata_path = await generate_and_save_croissant_metadata(full_row_data)
@@ -628,7 +657,7 @@ async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dic
                 new_records_appended += 1
                 yield f"data:   -> SUCCESS: Appended new record to {dataset_path}.\n\n"
             else:
-                error_msg = label_dict.get('error', 'An unknown error occurred.') if label_dict else 'An unknown error occurred.'
+                error_msg = label_data_packet.get('error', 'An unknown error occurred.') if label_data_packet else 'An unknown error occurred.'
                 yield f"data: \n  -> FAILED to process {link}. Reason: {error_msg}\n\n"
 
         yield "data: \n\n================================\n"
@@ -653,6 +682,7 @@ async def batch_label_endpoint(
     vertex_location: str = Form(""),
     vertex_model_name: str = Form(""),
     vertex_api_key: str = Form(""),
+    include_comments: bool = Form(False),
 ):
     """Endpoint to handle batch video labeling, appending to a persistent dataset."""
     gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
@@ -670,6 +700,6 @@ async def batch_label_endpoint(
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     return StreamingResponse(
-        process_batch_labeling_stream(csv_file, gemini_config, vertex_config, model_selection),
+        process_batch_labeling_stream(csv_file, gemini_config, vertex_config, model_selection, include_comments),
         media_type="text/event-stream"
     )

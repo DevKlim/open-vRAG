@@ -79,6 +79,14 @@
                     <button type="button" class="tab-link" data-tab="labeling">Single Video Labeling</button>
                     <button type="button" class="tab-link" data-tab="batch">Batch Auto-Labeling</button>
                 </div>
+                
+                <div class="control-group" id="labeling-options" style="display: none;">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="include_comments" name="include_comments" value="true" checked>
+                        <label for="include_comments">Include reasoning for each score</label>
+                    </div>
+                    <small>Generates a detailed JSON file with justifications in `data/labels/`.</small>
+                </div>
 
                 <!-- Tab Content -->
                 <div id="qa-tab" class="tab-content active">
@@ -171,6 +179,7 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
 
         const tabs = document.querySelectorAll('.tab-link');
         const tabContents = document.querySelectorAll('.tab-content');
+        const labelingOptions = document.getElementById('labeling-options');
         let activeTab = 'qa';
 
         // --- Event Listeners ---
@@ -186,6 +195,10 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
         function initialize() {
             readUrlParams();
             handleModelChange();
+            const initialActiveTab = document.querySelector('.tab-link.active');
+            if (initialActiveTab) {
+                handleTabClick({ target: initialActiveTab });
+            }
         }
 
         function handleTabClick(event) {
@@ -194,6 +207,9 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             event.target.classList.add('active');
             tabContents.forEach(content => content.classList.remove('active'));
             document.getElementById(`${activeTab}-tab`).classList.add('active');
+            
+            labelingOptions.style.display = (activeTab === 'labeling' || activeTab === 'batch') ? 'block' : 'none';
+            
             handleModelChange(); // Re-evaluate settings visibility
         }
 

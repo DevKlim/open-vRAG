@@ -6,11 +6,7 @@ Holistically analyze the provided video file, its accompanying user caption, and
 
 **Part 1: General Content Labels**
 1.  `video_context_summary`: A brief, neutral, one to two-sentence summary describing the main events, subject, and setting of the video.
-2.  `political_bias`: A score from 1 to 10, where 1 means the content is heavily biased and promotes a specific political ideology, and 10 means the content is neutral and objective.
-3.  `criticism_level`: A score from 1 to 10, where 1 means strong, direct, and aggressive criticism of a person, group, or idea, and 10 means the content is purely informational, neutral, or positive with no criticism.
-4.  `video_audio_pairing`: A score from 1 to 10 assessing the alignment of video visuals and audio. 1 means a complete mismatch. 10 means the audio perfectly describes the video.
-5.  `video_caption_pairing`: A score from 1 to 10 assessing the alignment of video visuals and the text caption. 1 means the caption is irrelevant or contradictory. 10 means the caption is an accurate description.
-6.  `audio_caption_pairing`: A score from 1 to 10 assessing the alignment of the spoken audio and the text caption. 1 means they are unrelated. 10 means the caption is a direct quote or perfect summary.
+{score_instructions}
 
 **Part 2: Disinformation & Manipulation Analysis**
 Create a nested JSON object for the key `disinformation_analysis`. This object should contain the following four fields to classify the nature and intent of any potential misinformation.
@@ -47,7 +43,42 @@ Create a nested JSON object for the key `disinformation_analysis`. This object s
 - Respond ONLY with a single, valid JSON object. Do not include any other text, explanations, or markdown formatting.
 
 Example of a valid response:
-{{
+{example_json}
+"""
+
+SCORE_INSTRUCTIONS_REASONING = """2.  `political_bias`: A nested JSON object with `score` (integer 1-10, where 1 is biased, 10 is neutral) and `reasoning` (a brief string explaining the score).
+3.  `criticism_level`: A nested JSON object with `score` (integer 1-10, where 1 is aggressive, 10 is neutral) and `reasoning`.
+4.  `video_audio_pairing`: A nested JSON object with `score` (integer 1-10, where 1 is a mismatch, 10 is perfect alignment) and `reasoning`.
+5.  `video_caption_pairing`: A nested JSON object with `score` (integer 1-10, where 1 is a mismatch, 10 is perfect alignment) and `reasoning`.
+6.  `audio_caption_pairing`: A nested JSON object with `score` (integer 1-10, where 1 is a mismatch, 10 is perfect alignment) and `reasoning`."""
+
+SCORE_INSTRUCTIONS_SIMPLE = """2.  `political_bias`: A score from 1 to 10, where 1 means the content is heavily biased and promotes a specific political ideology, and 10 means the content is neutral and objective.
+3.  `criticism_level`: A score from 1 to 10, where 1 means strong, direct, and aggressive criticism of a person, group, or idea, and 10 means the content is purely informational, neutral, or positive with no criticism.
+4.  `video_audio_pairing`: A score from 1 to 10 assessing the alignment of video visuals and audio. 1 means a complete mismatch. 10 means the audio perfectly describes the video.
+5.  `video_caption_pairing`: A score from 1 to 10 assessing the alignment of video visuals and the text caption. 1 means the caption is irrelevant or contradictory. 10 means the caption is an accurate description.
+6.  `audio_caption_pairing`: A score from 1 to 10 assessing the alignment of the spoken audio and the text caption. 1 means they are unrelated. 10 means the caption is a direct quote or perfect summary."""
+
+
+EXAMPLE_JSON_REASONING = """{{
+  "video_context_summary": "A political commentator discusses a recent policy change, showing clips of protests.",
+  "political_bias": {{ "score": 2, "reasoning": "The commentator uses emotionally charged language and only presents views that support their argument." }},
+  "criticism_level": {{ "score": 3, "reasoning": "The content is highly critical of the policy without acknowledging any potential benefits or alternative viewpoints." }},
+  "video_audio_pairing": {{ "score": 7, "reasoning": "The audio narration generally matches the theme of the protest clips, but some clips may be out of context." }},
+  "video_caption_pairing": {{ "score": 8, "reasoning": "The caption accurately summarizes the video's main point from the creator's perspective." }},
+  "audio_caption_pairing": {{ "score": 9, "reasoning": "The caption reflects the tone and main arguments made by the narrator in the audio." }},
+  "disinformation_analysis": {{
+    "disinformation_level": "Manipulated Content",
+    "disinformation_intent": "Political",
+    "threat_vector": "False Context",
+    "sentiment_and_bias_tactics": {{
+      "emotional_charge": 8,
+      "targets_cognitive_bias": true,
+      "promotes_tribalism": true
+    }}
+  }}
+}}"""
+
+EXAMPLE_JSON_SIMPLE = """{{
   "video_context_summary": "A political commentator discusses a recent policy change, showing clips of protests.",
   "political_bias": 2,
   "criticism_level": 3,
