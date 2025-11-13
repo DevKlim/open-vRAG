@@ -1,3 +1,4 @@
+# README.md
 # VideoChat-R1.5 Web Interface
 
 This project provides a complete, runnable environment to interact with the `OpenGVLab/VideoChat-R1_5` model, or optionally Google's Gemini models, through a web interface. You can provide a video URL, and the backend will download it, sanitize it, and analyze it based on your question and configuration.
@@ -46,7 +47,7 @@ The main cause of slow startup is the need to download and load the multi-gigaby
 -   **Pre-seeding the Model (Fastest Startup):** For the fastest possible first-time startup, you can download the model manually.
     1.  Run `git lfs install && git clone https://huggingface.co/OpenGVLab/VideoChat-R1_5` on your host machine.
     2.  Move the downloaded `VideoChat-R1_5` folder into this project's `vChat` directory.
-    3.  Rename it to `VideoChat-R1`.
+    3.  Rename it to `model`.
     The `docker-compose.yml` is already configured to detect this folder and use it, completely skipping any downloads.
 
 ## Features

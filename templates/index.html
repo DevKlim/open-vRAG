@@ -20,7 +20,7 @@
 
             <form id="vchat-form" novalidate>
                 <section class="control-group">
-                    <label for="video_url">Video Source (URL or Local Path)</label>
+                    <label for="video_url">Video Source (for Single Analysis)</label>
                     <input type="text" id="video_url" name="video_url" value="https://www.youtube.com/watch?v=XHTskNem4co" placeholder="e.g., https://youtube.com/watch?v=..." required>
                 </section>
 
@@ -28,7 +28,8 @@
                     <label for="model_selection">Execution Model</label>
                     <select id="model_selection" name="model_selection">
                         <option value="default">Default Local Model</option>
-                        <option value="gemini">Gemini Pro Vision (Cloud)</option>
+                        <option value="gemini">Google AI Studio (API Key)</option>
+                        <option value="vertex">Google Cloud Vertex AI (GCP Project)</option>
                         {% if custom_model_available %}
                         <option value="custom">Custom Fine-tuned Model</option>
                         {% endif %}
@@ -41,21 +42,42 @@
                 <div id="gemini-options" class="control-group collapsible-section">
                     <div class="options-grid">
                         <div>
-                            <label for="gemini_api_key">Gemini API Key</label>
+                            <label for="gemini_api_key">Google AI API Key</label>
                             <input type="password" id="gemini_api_key" name="gemini_api_key" placeholder="Enter your API key">
                         </div>
                         <div>
-                            <label for="gemini_model_name">Gemini Model Name</label>
+                            <label for="gemini_model_name">Model Name</label>
                             <input type="text" id="gemini_model_name" name="gemini_model_name" value="models/gemini-1.5-pro-latest">
                         </div>
                     </div>
                 </div>
 
+                <div id="vertex-options" class="control-group collapsible-section">
+                    <div class="options-grid">
+                        <div>
+                            <label for="vertex_project_id">GCP Project ID</label>
+                            <input type="text" id="vertex_project_id" name="vertex_project_id" value="DeepContextGraph">
+                        </div>
+                        <div>
+                            <label for="vertex_api_key">API Key (Optional)</label>
+                            <input type="password" id="vertex_api_key" name="vertex_api_key" placeholder="Overrides gcloud auth">
+                        </div>
+                    </div>
+                     <div class="control-group" style="margin-top: 1rem;">
+                        <label for="vertex_model_name">Vertex Model Name</label>
+                        <div class="options-grid">
+                            <input type="text" id="vertex_model_name" name="vertex_model_name" value="gemini-1.5-pro-preview-0409">
+                            <input type="text" id="vertex_location" name="vertex_location" value="us-central1">
+                        </div>
+                    </div>
+                    <small>Requires a GCP Project ID. Authentication uses an API Key (if provided) or falls back to Application Default Credentials (e.g., `gcloud auth application-default login`).</small>
+                </div>
+
                 <!-- Tabs for different tasks -->
                 <div class="tabs">
                     <button type="button" class="tab-link active" data-tab="qa">Q&A & Factuality</button>
-                    <button type="button" class="tab-link" data-tab="batch">Batch Processing</button>
-                    <button type="button" class="tab-link" data-tab="labeling">Auto-Labeling</button>
+                    <button type="button" class="tab-link" data-tab="labeling">Single Video Labeling</button>
+                    <button type="button" class="tab-link" data-tab="batch">Batch Auto-Labeling</button>
                 </div>
 
                 <!-- Tab Content -->
@@ -75,18 +97,23 @@
                         </fieldset>
                     </details>
                 </div>
+                
+                <div id="labeling-tab" class="tab-content">
+                     <p class="form-sub-label">Automatically generate labels for the single video in 'Video Source' and append the result to `data/dataset.csv`. This task requires Google AI Studio or Vertex AI.</p>
+                </div>
 
                 <div id="batch-tab" class="tab-content">
                     <div class="control-group">
-                        <label for="csv_file">Upload CSV</label>
+                        <label for="csv_file">Upload CSV for Batch Labeling</label>
                         <input type="file" id="csv_file" name="csv_file" accept=".csv">
-                        <small>Requires a CSV file with a 'url' column header. The 'Video Source' field above will be ignored.</small>
+                        <small>
+                            Upload a CSV with a 'link' column. The process will add new, fully-labeled records to a persistent <strong>`data/dataset.csv`</strong> file.
+                            <br>It will automatically skip any links that have already been processed in that file.
+                            <br><strong>This feature requires Google AI Studio or Vertex AI.</strong>
+                        </small>
                     </div>
                 </div>
 
-                <div id="labeling-tab" class="tab-content">
-                     <p class="form-sub-label">Automatically generate a structured data label for the video specified in the 'Video Source' field. This task requires the Gemini model.</p>
-                </div>
 
                  <details id="local-model-settings" class="advanced-options">
                     <summary>Advanced Local Model Settings</summary>
@@ -132,8 +159,10 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
 
         const modelSelection = document.getElementById('model_selection');
         const geminiOptions = document.getElementById('gemini-options');
+        const vertexOptions = document.getElementById('vertex-options');
         const geminiApiKeyInput = document.getElementById('gemini_api_key');
         const geminiModelNameInput = document.getElementById('gemini_model_name');
+        const vertexProjectIdInput = document.getElementById('vertex_project_id');
         const localModelSettings = document.getElementById('local-model-settings');
 
         const csvFileInput = document.getElementById('csv_file');
@@ -165,24 +194,30 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
             event.target.classList.add('active');
             tabContents.forEach(content => content.classList.remove('active'));
             document.getElementById(`${activeTab}-tab`).classList.add('active');
-            updateSubmitButton();
+            handleModelChange(); // Re-evaluate settings visibility
         }
 
         function handleModelChange() {
-            const isGemini = modelSelection.value === 'gemini';
+            const model = modelSelection.value;
+            const isGemini = model === 'gemini';
+            const isVertex = model === 'vertex';
+            const isCloud = isGemini || isVertex;
+            
             geminiOptions.style.display = isGemini ? 'block' : 'none';
-            localModelSettings.style.display = isGemini ? 'none' : 'block';
+            vertexOptions.style.display = isVertex ? 'block' : 'none';
+            localModelSettings.style.display = isCloud || activeTab === 'batch' || activeTab === 'labeling' ? 'none' : 'block';
             updateSubmitButton();
         }
 
         function updateSubmitButton() {
-            if (activeTab === 'labeling' && modelSelection.value !== 'gemini') {
-                submitBtn.textContent = 'Switch to Gemini to Run';
+             const model = modelSelection.value;
+             if ((activeTab === 'labeling' || activeTab === 'batch') && (model !== 'gemini' && model !== 'vertex')) {
+                submitBtn.textContent = 'Switch to Google Cloud Model to Run';
                 submitBtn.disabled = true;
             } else {
                  let text = 'Run Analysis';
-                 if (activeTab === 'batch') text = 'Run Batch Analysis';
-                 if (activeTab === 'labeling') text = 'Generate Labels';
+                 if (activeTab === 'batch') text = 'Run Batch Labeling';
+                 if (activeTab === 'labeling') text = 'Generate & Append Labels';
                  submitBtn.textContent = text;
                  submitBtn.disabled = false;
             }
@@ -201,36 +236,47 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
 
         async function handleFormSubmit(event) {
             event.preventDefault();
-
-            // Determine endpoint and prepare data based on active tab
             let endpoint = '';
             const formData = new FormData(form);
+            const model = modelSelection.value;
             
             if (activeTab === 'qa') {
                 endpoint = '/process';
                 logTitle.textContent = 'Q&A / Factuality Log';
-                if (!videoUrlInput.value || !questionInput.value) {
-                    alert('Please provide a Video Source and a Question for this task.');
+                if (!videoUrlInput.value) {
+                    alert('Please provide a Video Source for this task.');
                     return;
                 }
             } else if (activeTab === 'batch') {
-                endpoint = '/batch_process';
-                logTitle.textContent = 'Batch Processing Log';
+                endpoint = '/batch_label';
+                logTitle.textContent = 'Batch Auto-Labeling Log';
                  if (!csvFileInput.files || csvFileInput.files.length === 0) {
-                    alert('Please select a CSV file for batch processing.');
+                    alert('Please select a CSV file for batch labeling.');
                     return;
                 }
+                 if (model === 'gemini' && !geminiApiKeyInput.value) {
+                    alert('Batch labeling with Google AI Studio requires an API Key.');
+                    return;
+                 }
+                 if (model === 'vertex' && !vertexProjectIdInput.value) {
+                    alert('Batch labeling with Vertex AI requires a GCP Project ID.');
+                    return;
+                 }
             } else if (activeTab === 'labeling') {
                 endpoint = '/label_video';
-                logTitle.textContent = 'Auto-Labeling Log';
+                logTitle.textContent = 'Single Video Labeling Log';
                 if (!videoUrlInput.value) {
                     alert('Please provide a Video Source for labeling.');
                     return;
                 }
-                 if (!geminiApiKeyInput.value) {
-                    alert('The Auto-Labeling task requires a Gemini API Key.');
+                 if (model === 'gemini' && !geminiApiKeyInput.value) {
+                    alert('Auto-Labeling with Google AI Studio requires an API key.');
                     return;
-                }
+                 }
+                 if (model === 'vertex' && !vertexProjectIdInput.value) {
+                    alert('Auto-Labeling with Vertex AI requires a GCP Project ID.');
+                    return;
+                 }
             }
 
             setLoadingState(true);
@@ -255,7 +301,7 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
                 submitBtn.textContent = 'Processing...';
                 outputLog.textContent = 'Initializing request...';
             } else {
-                updateSubmitButton(); // Re-enables button and sets correct text
+                updateSubmitButton();
             }
         }
 
@@ -275,9 +321,9 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
 
                 for (const message of messages) {
                     if (message.startsWith('event: close')) return;
+
                     if (message.startsWith('data:')) {
                         let data = message.substring(5).trim();
-                        // Handle carriage returns for dynamic progress updates
                         if (data.includes('\r')) {
                             const lines = outputLog.textContent.split('\n');
                             lines[lines.length - 1] = data.replace(/\r/g, '');
@@ -288,6 +334,11 @@ Then, provide your answer within the <answer> </answer> tags. For example: <thin
                         outputLog.scrollTop = outputLog.scrollHeight;
                     }
                 }
+            }
+             // Process any remaining data in the buffer
+            if (buffer.startsWith('data:')) {
+                outputLog.textContent += buffer.substring(5).trim() + '\n';
+                outputLog.scrollTop = outputLog.scrollHeight;
             }
         }
     </script>

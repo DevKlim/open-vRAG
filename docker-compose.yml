@@ -1,37 +1,28 @@
-# docker-compose.yml
+# /docker-compose.yml
 services:
   videochat_webui:
     build: .
     container_name: videochat_webui
-    # The --reload flag tells uvicorn to automatically restart the server
-    # whenever it detects a code change in the mounted volume.
+    # The --reload flag enables auto-reloading for development
     command: python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8005:8000"
     volumes:
-      # --- IMPORTANT FOR PERFORMANCE & PERSISTENCE ---
-      # The following volumes are crucial to avoid re-downloading large files (like models)
-      # every time you restart the container. Make sure these local directories exist.
-
-      # Mount the current directory for live code changes in development
+      # Mount the current directory for live code changes
       - .:/app
 
-      # Mount a local directory to cache Hugging Face models and other assets.
-      # This prevents re-downloading multi-gigabyte models on every startup.
-      # ON YOUR HOST: Create a directory named `huggingface_cache` in this folder.
-      - ./huggingface_cache:/root/.cache/huggingface
-
-      # Mount a local directory to store downloaded videos from the web UI.
+      # Mount a local directory for downloaded videos
       - ./videos:/app/videos
 
-      # Mount a local directory for datasets used by fine-tuning scripts.
+      # Mount a local directory for datasets
       - ./data:/app/data
 
-      # OPTIONAL BUT RECOMMENDED FOR STARTUP SPEED: Pre-download the model.
-      # 1. Download the model: `git lfs install && git clone https://huggingface.co/OpenGVLab/VideoChat-R1_5`
-      # 2. Rename the downloaded `VideoChat-R1_5` folder to `model` and place it in this project's root directory.
-      # The application will then load the model directly from this folder instead of downloading it.
-      - ./model:/app/local_model # This maps your local `model` folder into the container.
+      # Mount your pre-downloaded model to avoid downloading it on startup.
+      # This is the most effective way to ensure fast startup and avoid Hugging Face downloads.
+      - ./model:/app/local_model
+
+      # Add a named volume to persist Google Cloud credentials
+      - gcloud_config:/root/.config/gcloud
     deploy:
       resources:
         reservations:
@@ -41,3 +32,7 @@ services:
               capabilities: [gpu]
     stdin_open: true
     tty: true
+
+# Define the named volume for gcloud credentials
+volumes:
+  gcloud_config:

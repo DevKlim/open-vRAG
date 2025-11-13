@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 PROMPT_VISUAL_ARTIFACTS = (
     "You are a digital forensics expert. Analyze the video for visual manipulation. Provide your findings in a structured JSON format. The JSON object must contain three keys: 'analysis', 'score', and 'justification'.\n"
     "- 'analysis' (string): A detailed report on AI artifacts (waxy skin, strange physics), editing cuts, overlays, and overall visual coherence.\n"
-    "- 'score' (integer): A score from 1 (blatant, obvious manipulation) to 10 (appears completely authentic and unedited).\n"
+    "- 'score' (integer): A score from 1 to 10, where 1 means blatant, obvious manipulation is present, and 10 means the video appears completely authentic and unedited.\n"
     "- 'justification' (string): A brief sentence explaining why you gave that score.\n\n"
     "Example format: {\"analysis\": \"...detailed report...\", \"score\": 3, \"justification\": \"Score is low due to inconsistent shadows and unnatural hand gestures.\"}"
 )
@@ -22,7 +22,7 @@ PROMPT_VISUAL_ARTIFACTS = (
 PROMPT_CONTENT_ANALYSIS = (
     "You are a professional fact-checker and media analyst. Analyze the video's content and transcript for accuracy, bias, and propaganda. Provide your findings in a structured JSON format with three keys: 'analysis', 'score', and 'justification'.\n"
     "- 'analysis' (string): A detailed report on factual accuracy, potential misinformation, political or commercial bias, use of propaganda techniques, and source credibility. Analyze if it creates an echo chamber.\n"
-    "- 'score' (integer): A score from 1 (pure propaganda/disinformation) to 10 (objective, well-sourced, and balanced reporting).\n"
+    "- 'score' (integer): A score from 1 to 10, where 1 means the content is pure propaganda or disinformation, and 10 means it is objective, well-sourced, and balanced reporting.\n"
     "- 'justification' (string): A brief sentence explaining the score based on your findings (e.g., 'Score is moderate due to one-sided presentation of arguments without citing sources.').\n\n"
     "**Transcript for Context:**\n\n{transcript}\n\n"
     "Respond ONLY with the JSON object."
@@ -31,7 +31,7 @@ PROMPT_CONTENT_ANALYSIS = (
 PROMPT_AUDIO_ANALYSIS = (
     "You are a media forensics analyst. Based on the video's visuals and the transcript, analyze for potential audio manipulation. Provide your findings in a structured JSON format with three keys: 'analysis', 'score', and 'justification'.\n"
     "- 'analysis' (string): A report on inferred audio issues. Check for mismatches in lip-sync, evidence of audio cuts suggested by jarring visual edits, and consistency between the transcript's tone and the visual scene.\n"
-    "- 'score' (integer): A score from 1 (audio appears heavily edited or mismatched) to 10 (audio appears perfectly synchronized and consistent with visuals).\n"
+    "- 'score' (integer): A score from 1 to 10, where 1 means the audio appears heavily edited or mismatched with the visuals, and 10 means the audio is perfectly synchronized and consistent.\n"
     "- 'justification' (string): A brief sentence explaining the score (e.g., 'Score is high as lip movements in the transcript align perfectly with the speaker visuals.').\n\n"
     "**Transcript for Context:**\n\n{transcript}\n\n"
     "Respond ONLY with the JSON object."
