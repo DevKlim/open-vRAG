@@ -27,6 +27,9 @@ try:
 except ImportError:
     vertexai = None
 
+# Check for LITE_MODE. This will be set by DockerfileLite.
+LITE_MODE = os.getenv("LITE_MODE", "false").lower() == "true"
+
 #  Globals for model management 
 processor = None
 base_model = None
@@ -39,6 +42,10 @@ def load_models():
     Loads the base model and, if LoRA adapters exist, the fine-tuned PEFT model.
     This function now REQUIRES the model to be pre-downloaded in the '/app/local_model' directory.
     """
+    if LITE_MODE:
+        logger.info("LITE_MODE is enabled. Skipping local model loading.")
+        return
+
     global processor, base_model, peft_model, active_model
     if base_model is not None:
         logger.info("Models already loaded.")

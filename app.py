@@ -9,7 +9,7 @@ import io
 import datetime
 import json
 from fastapi import FastAPI, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, Response, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import yt_dlp
@@ -38,6 +38,9 @@ logging.basicConfig(
 )
 # 
 
+# Check for LITE_MODE. This will be set by DockerfileLite.
+LITE_MODE = os.getenv("LITE_MODE", "false").lower() == "true"
+
 #  fastAPI app setup 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -53,24 +56,34 @@ os.makedirs("metadata", exist_ok=True) # Ensure the metadata directory exists
 async def startup_event():
     """Load all models on application startup."""
     logging.info("Application starting up...")
-    try:
-        inference_logic.load_models()
-        transcription.load_model()
-    except Exception as e:
-        logging.fatal(f"Could not load models. Error: {e}", exc_info=True)
+    if not LITE_MODE:
+        try:
+            inference_logic.load_models()
+            transcription.load_model()
+        except Exception as e:
+            logging.fatal(f"Could not load models. Error: {e}", exc_info=True)
+    else:
+        logging.info("Running in LITE mode. Local models and transcription are disabled.")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     """Serve the main HTML page, indicating if a custom model is available."""
-    custom_model_available = inference_logic.peft_model is not None
+    custom_model_available = False
+    if not LITE_MODE:
+        custom_model_available = inference_logic.peft_model is not None
+        
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "custom_model_available": custom_model_available
+        "custom_model_available": custom_model_available,
+        "lite_mode": LITE_MODE
     })
 
 @app.get("/model-architecture", response_class=PlainTextResponse)
 async def get_model_architecture():
     """Returns the base model architecture as a plain text string."""
+    if LITE_MODE:
+        return "Running in LITE mode. No local model is loaded. Using Google Cloud APIs."
+        
     if inference_logic.base_model:
         return str(inference_logic.base_model)
     return "Base model not loaded yet. Please wait a moment and try again."
@@ -185,13 +198,17 @@ async def prepare_video_assets_async(url: str) -> dict:
         audio_path_str = None
 
     if not transcript_path or not Path(transcript_path).exists():
-        progress_message = "No pre-existing transcript found. Generating one locally...\n"
-        logging.info(progress_message)
-        if audio_path_str and Path(audio_path_str).exists():
-            generated_vtt_path = await loop.run_in_executor(None, transcription.generate_transcript, audio_path_str)
-            transcript_path = generated_vtt_path if generated_vtt_path else transcript_path
+        if LITE_MODE:
+            progress_message = "LITE mode: Local transcription disabled. Relying on existing transcripts.\n"
+            logging.info(progress_message)
         else:
-            progress_message = "No audio file found, skipping local transcription.\n"
+            progress_message = "No pre-existing transcript found. Generating one locally...\n"
+            logging.info(progress_message)
+            if audio_path_str and Path(audio_path_str).exists():
+                generated_vtt_path = await loop.run_in_executor(None, transcription.generate_transcript, audio_path_str)
+                transcript_path = generated_vtt_path if generated_vtt_path else transcript_path
+            else:
+                progress_message = "No audio file found, skipping local transcription.\n"
     else:
         progress_message = "Using pre-existing transcript file.\n"
     
@@ -232,6 +249,10 @@ async def process_request_stream(video_url: str, question: str, generation_confi
             async for message in inference_logic.run_vertex_pipeline(video_path, question, checks, vertex_config):
                 yield f"data: {message}\n\n"
         else:
+            if LITE_MODE:
+                yield "data: ERROR: Local models are not available in this version of the application. Please select a Google Cloud model.\n\n"
+                return
+
             inference_logic.switch_active_model(model_selection)
             yield f"data: Using {model_selection.capitalize()} Model for inference.\n\n"
             is_factuality_run = any(checks.values())
@@ -559,6 +580,18 @@ async def label_video_endpoint(
 
     return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
 
+
+@app.get("/download-dataset", response_class=FileResponse)
+async def download_dataset():
+    """Provides the main dataset CSV file for download."""
+    dataset_path = Path("data/dataset.csv")
+    if not dataset_path.exists():
+        return Response(content="Dataset file not found. Generate some labels first.", status_code=404)
+    return FileResponse(
+        path=dataset_path,
+        filename="dataset.csv",
+        media_type='text/csv'
+    )
 
 async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
     """
