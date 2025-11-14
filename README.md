@@ -1,7 +1,7 @@
 # README.md
 # VideoChat-R1.5 Web Interface
 
-This project provides a complete, runnable environment to interact with the `OpenGVLab/VideoChat-R1_5` model, or optionally Google's Gemini models, through a web interface. You can provide a video URL, and the backend will download it, sanitize it, and analyze it based on your question and configuration.
+This project provides a complete, runnable environment to interact with our fine-tuned model. Our model is built based off of `OpenGVLab/VideoChat-R1_5` model through a web interface. Ultimately, link model with `gemini-flash-latest` for optimal capabilities with video digestion. You can provide a video URL, and the backend will download it, sanitize it, and analyze it based on your question and configuration.
 
 **This application requires an NVIDIA GPU to run the default local model.**
 
