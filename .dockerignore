@@ -1,4 +1,4 @@
-# vChat/.dockerignore
+# .dockerignore
 # Ignore Python cache
 __pycache__/
 *.pyc
@@ -24,3 +24,7 @@ build/
 # These will be handled by Docker volumes at runtime.
 videos/
 huggingface_cache/
+model/
+
+# Ignore notebooks from build context
+*.ipynb

@@ -1,3 +1,4 @@
+
 # Core model dependencies
 python-multipart
 transformers
@@ -26,6 +27,9 @@ uv
 # Gemini API Client
 google-generativeai
 
+# Vertex AI API Client
+google-cloud-aiplatform
+
 # --- Fine-tuning Dependencies ---
 # PEFT for Low-Rank Adaptation (LoRA)
 peft
@@ -35,3 +39,9 @@ bitsandbytes
 trl
 # For loading datasets
 datasets
+
+# --- Metadata Generation ---
+croissant
+
+# --- Audio Transcription ---
+openai-whisper

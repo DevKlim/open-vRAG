@@ -1,4 +1,3 @@
-# inference_logic.py
 import torch
 import re
 import ast
@@ -10,13 +9,23 @@ import json
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from peft import PeftModel
 from my_vision_process import process_vision_info, client
-from labeling_logic import LABELING_PROMPT_TEMPLATE
+from labeling_logic import (
+    LABELING_PROMPT_TEMPLATE, SCORE_INSTRUCTIONS_SIMPLE, SCORE_INSTRUCTIONS_REASONING,
+    EXAMPLE_JSON_SIMPLE, EXAMPLE_JSON_REASONING
+)
 
 try:
     import google.generativeai as genai
     from google.generativeai.types import generation_types
 except ImportError:
     genai = None
+
+try:
+    import vertexai
+    from vertexai.generative_models import GenerativeModel, Part
+    import vertexai.preview.generative_models as generative_models
+except ImportError:
+    vertexai = None
 
 #  Globals for model management 
 processor = None
@@ -28,7 +37,7 @@ logger = logging.getLogger(__name__)
 def load_models():
     """
     Loads the base model and, if LoRA adapters exist, the fine-tuned PEFT model.
-    Checks for a local model copy first before downloading from Hugging Face Hub.
+    This function now REQUIRES the model to be pre-downloaded in the '/app/local_model' directory.
     """
     global processor, base_model, peft_model, active_model
     if base_model is not None:
@@ -45,10 +54,14 @@ def load_models():
     local_model_path = "/app/local_model"
     if os.path.exists(local_model_path) and os.listdir(local_model_path):
         model_path = local_model_path
-        logger.info(f"Found non-empty local model directory at '{model_path}'. Attempting to load from local files.")
+        logger.info(f"Found local model directory at '{model_path}'. Loading from local files.")
     else:
-        model_path = "OpenGVLab/VideoChat-R1_5"
-        logger.info(f"Local model directory '{local_model_path}' not found or is empty. Will download from Hugging Face Hub.")
+        # The application will not download the model anymore. It must be provided.
+        error_msg = f"FATAL: Local model not found at '{local_model_path}'. " \
+                    "Please download the 'OpenGVLab/VideoChat-R1_5' model and mount it into the container. " \
+                    "See the README.md for instructions."
+        logger.fatal(error_msg)
+        raise RuntimeError(error_msg)
     
     try:
         import flash_attn
@@ -61,7 +74,7 @@ def load_models():
     logger.info(f"Loading base model from {model_path}...")
     base_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation=attn_implementation
     ).eval()
@@ -193,14 +206,15 @@ async def run_gemini_pipeline(video_path: str, question: str, checks: dict, gemi
     API configuration, file upload, and response generation.
     """
     if genai is None:
-        yield "ERROR: 'google-generativeai' package not installed. Please install it to use Gemini models.\n"
+        yield "ERROR: 'google-generativeai' package not installed. Please install it to use Google AI Studio models.\n"
         return
 
     api_key = gemini_config.get("api_key")
-    model_name = gemini_config.get("model_name", "models/gemini-1.5-pro-latest")
+    model_name = gemini_config.get("model_name", "models/gemini-2.5-pro")
+    
 
     if not api_key:
-        yield "ERROR: Gemini API Key is required. Please provide it in the UI or via URL parameters.\n"
+        yield "ERROR: Google AI Studio API Key is required. Please provide it in the UI.\n"
         return
 
     try:
@@ -236,7 +250,7 @@ async def run_gemini_pipeline(video_path: str, question: str, checks: dict, gemi
         is_factuality_run = any(checks.values())
 
         if is_factuality_run:
-            yield "Starting Gemini Factuality & Credibility pipeline...\n\n"
+            yield "Starting Google AI Studio Factuality & Credibility pipeline...\n\n"
             prompts_to_run = []
             if checks.get("visuals"):
                 prompts_to_run.append(("Visual Artifacts", "You are a digital forensics expert. Analyze this video for any signs of visual manipulation, such as AI-generated artifacts (waxy skin, strange physics), unusual editing cuts, or doctored overlays. Provide a detailed report on the video's visual coherence and authenticity."))
@@ -246,22 +260,22 @@ async def run_gemini_pipeline(video_path: str, question: str, checks: dict, gemi
                  prompts_to_run.append(("Audio Anomaly Detection", "You are a media forensics analyst. Analyze the audio track of this video in conjunction with the visuals. Listen for signs of audio manipulation, such as abrupt cuts, changes in background noise that don't match the scene, or clear mismatches in lip-sync. Report on the audio's consistency and authenticity."))
 
             for title, prompt_text in prompts_to_run:
-                yield f"--- Running '{title}' Analysis with Gemini ---\n"
+                yield f"--- Running '{title}' Analysis with Google AI Studio ---\n"
                 response = await loop.run_in_executor(None, lambda: model.generate_content([prompt_text, video_input], request_options={'timeout': 600}))
                 yield f"===== ANALYSIS RESULT: {title.upper()} =====\n"
                 yield response.text
                 yield f"\n========================================\n\n"
 
         else: # General Q&A
-            yield "Sending question to Gemini...\n"
+            yield "Sending question to Google AI Studio...\n"
             prompt = [question, video_input]
             response = await loop.run_in_executor(None, lambda: model.generate_content(prompt, request_options={'timeout': 600}))
-            yield "\n--- Gemini's Response ---\n"
+            yield "\n--- Google AI Studio's Response ---\n"
             yield response.text
 
     except Exception as e:
-        yield f"ERROR: An error occurred during the Gemini process: {e}\n"
-        logger.error("Gemini pipeline error", exc_info=True)
+        yield f"ERROR: An error occurred during the Google AI Studio process: {e}\n"
+        logger.error("Google AI Studio pipeline error", exc_info=True)
     finally:
         # 4. Clean up the uploaded file
         if uploaded_file:
@@ -272,20 +286,90 @@ async def run_gemini_pipeline(video_path: str, question: str, checks: dict, gemi
             except Exception as e:
                 yield f"Warning: Could not clean up uploaded file {uploaded_file.name}. You may need to delete it manually from the Google AI Studio file manager. Details: {e}\n"
 
-async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict):
+# --- Vertex AI Pipeline ---
+async def run_vertex_pipeline(video_path: str, question: str, checks: dict, vertex_config: dict):
     """
-    Runs the automated labeling pipeline using Gemini Pro Vision.
+    Handles inference with a model on Google Cloud Vertex AI.
+    """
+    if vertexai is None:
+        yield "ERROR: 'google-cloud-aiplatform' package not installed. Please install it to use Vertex AI models.\n"
+        return
+
+    project_id = vertex_config.get("project_id")
+    location = vertex_config.get("location", "us-central1")
+    model_name = vertex_config.get("model_name", "gemini-1.5-pro-preview-0409")
+    api_key = vertex_config.get("api_key")
+    
+    if not project_id:
+        yield "ERROR: Vertex AI Project ID is required. Please provide it in the UI.\n"
+        return
+
+    try:
+        if api_key:
+            yield "NOTE: The API Key field is not used for Vertex AI authentication with this library version.\n"
+            yield "Authentication relies on Application Default Credentials (ADC).\n"
+
+        yield f"Initializing Vertex AI for project '{project_id}' in '{location}'...\n"
+        yield "If this fails, run 'docker exec -it videochat_webui gcloud auth application-default login' on your host machine.\n"
+        
+        vertexai.init(project=project_id, location=location)
+        model = GenerativeModel(model_name)
+        
+        yield "Vertex AI initialized successfully.\n"
+
+        loop = asyncio.get_event_loop()
+        yield f"Reading video file '{os.path.basename(video_path)}'...\n"
+        with open(video_path, 'rb') as f:
+            video_bytes = f.read()
+        video_part = Part.from_data(video_bytes, mime_type="video/mp4")
+        yield "Video data prepared for Vertex AI.\n\n"
+
+        is_factuality_run = any(checks.values())
+        if is_factuality_run:
+            yield "Starting Vertex AI Factuality & Credibility pipeline...\n\n"
+            prompts_to_run = []
+            if checks.get("visuals"):
+                prompts_to_run.append(("Visual Artifacts", "You are a digital forensics expert. Analyze this video for any signs of visual manipulation..."))
+            if checks.get("content"):
+                prompts_to_run.append(("Content & Credibility", "You are a professional fact-checker. Analyze the spoken content and context of this video..."))
+            if checks.get("audio"):
+                 prompts_to_run.append(("Audio Anomaly Detection", "You are a media forensics analyst. Analyze the audio track of this video..."))
+
+            for title, prompt_text in prompts_to_run:
+                yield f"--- Running '{title}' Analysis with Vertex AI ---\n"
+                contents = [video_part, prompt_text]
+                response = await loop.run_in_executor(None, lambda: model.generate_content(contents))
+                yield f"===== ANALYSIS RESULT: {title.upper()} =====\n"
+                yield response.text
+                yield f"\n========================================\n\n"
+        
+        else:
+            yield "Sending question to Vertex AI...\n"
+            contents = [video_part, question]
+            response = await loop.run_in_executor(None, lambda: model.generate_content(contents))
+            yield "\n--- Vertex AI's Response ---\n"
+            yield response.text
+
+    except Exception as e:
+        yield f"ERROR: An error occurred during the Vertex AI process: {e}\n"
+        yield "Authentication may have failed. Please ensure your gcloud credentials are set up correctly.\n"
+        logger.error("Vertex AI pipeline error", exc_info=True)
+
+
+async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict, include_comments: bool):
+    """
+    Runs the automated labeling pipeline using Google AI Studio.
     Yields progress updates and the final parsed JSON dictionary of labels.
     """
     if genai is None:
-        yield "ERROR: 'google-generativeai' package not installed. Please install it to use Gemini models.\n"
+        yield "ERROR: 'google-generativeai' package not installed. Please install it to use Google AI Studio models.\n"
         return
 
     api_key = gemini_config.get("api_key")
     model_name = gemini_config.get("model_name", "models/gemini-1.5-pro-latest")
 
     if not api_key:
-        yield "ERROR: Gemini API Key is required.\n"
+        yield "ERROR: Google AI Studio API Key is required.\n"
         return
 
     try:
@@ -298,33 +382,41 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
     loop = asyncio.get_event_loop()
     uploaded_file = None
     try:
-        # 1. Upload the video file
         yield f"Uploading video '{os.path.basename(video_path)}' to Google AI... (This may take a moment)"
         uploaded_file = await loop.run_in_executor(None, lambda: genai.upload_file(path=video_path))
         yield f"File uploaded. Waiting for Google to process it..."
         
-        # 2. Poll for processing status
         while uploaded_file.state.name == "PROCESSING":
             yield "  - Processing...\r"
             await asyncio.sleep(5)
             uploaded_file = await loop.run_in_executor(None, lambda: genai.get_file(name=uploaded_file.name))
 
         if uploaded_file.state.name != "ACTIVE":
-            yield f"ERROR: File processing failed. State: {uploaded_file.state.name}\n"
-            return
+            raise RuntimeError(f"File processing failed. State: {uploaded_file.state.name}")
         
         yield "Video is processed and ready for analysis."
         video_input = uploaded_file
         
-        # 3. Generate content with the labeling prompt
         model = genai.GenerativeModel(model_name)
-        yield "Constructing prompt for Gemini model..."
-        prompt_text = LABELING_PROMPT_TEMPLATE.format(caption=caption, transcript=transcript)
-        prompt = [prompt_text, video_input]
+        yield "Constructing prompt for Google AI Studio model..."
         
-        yield "Sending request to Gemini for analysis and labeling..."
+        if include_comments:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_REASONING,
+                example_json=EXAMPLE_JSON_REASONING
+            )
+        else:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_SIMPLE,
+                example_json=EXAMPLE_JSON_SIMPLE
+            )
+
+        yield "Sending request to Google AI Studio for analysis and labeling..."
         
-        # **FIX**: Add safety settings to be less restrictive and improve error handling
         safety_settings = {
             'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
             'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
@@ -335,48 +427,32 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
         response = await loop.run_in_executor(
             None, 
             lambda: model.generate_content(
-                prompt,
+                [prompt_text, video_input],
                 request_options={'timeout': 600},
                 safety_settings=safety_settings
             )
         )
         
-        # **FIX**: Add explicit check for safety blocking before trying to access .text
         if not response.parts:
-            block_reason = "Unknown"
-            if response.prompt_feedback and response.prompt_feedback.block_reason:
-                block_reason = response.prompt_feedback.block_reason.name
-            yield f"\nERROR: The request was blocked by Gemini's safety filters. Reason: {block_reason}"
-            yield "This can happen when analyzing sensitive topics. The prompt and safety settings have been updated to minimize this, but it can still occur."
-            yield f"--- RAW FEEDBACK ---\n{response.prompt_feedback}\n------------------"
-            yield None # Indicate failure by yielding None
-            return # Stop execution for this pipeline
+            block_reason = (response.prompt_feedback and response.prompt_feedback.block_reason) or "Unknown"
+            raise RuntimeError(f"Request blocked by Google's safety filters. Reason: {block_reason}")
 
-        yield "Received response from Gemini. Parsing JSON..."
+        yield "Received response from Google AI Studio. Parsing JSON..."
         
-        try:
-            # Gemini sometimes wraps the JSON in ```json ... ```
-            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if not json_match:
-                raise json.JSONDecodeError("No JSON object found in response.", response.text, 0)
+        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if not json_match:
+            raise json.JSONDecodeError("No JSON object found in response.", response.text, 0)
+        
+        parsed_json = json.loads(json_match.group(0))
+        yield "Successfully parsed JSON labels."
+        yield f"--- PARSED LABELS ---\n{json.dumps(parsed_json, indent=2)}\n---------------------\n"
+        yield parsed_json
             
-            json_str = json_match.group(0)
-            parsed_json = json.loads(json_str)
-            yield "Successfully parsed JSON labels."
-            yield f"--- PARSED LABELS ---\n{json.dumps(parsed_json, indent=2)}\n---------------------\n"
-            # Yield the parsed data as the final result for the calling function
-            yield parsed_json
-            
-        except (json.JSONDecodeError, AttributeError) as e:
-            yield f"ERROR: Could not parse JSON from Gemini's response. Details: {e}"
-            yield f"--- RAW RESPONSE ---\n{response.text}\n------------------"
-            yield None # Indicate failure
-
     except Exception as e:
-        yield f"ERROR: An error occurred during the Gemini labeling process: {e}"
-        logger.error("Gemini labeling pipeline error", exc_info=True)
+        yield f"ERROR: An error occurred during the Google AI Studio labeling process: {e}"
+        logger.error("Google AI Studio labeling pipeline error", exc_info=True)
+        yield None
     finally:
-        # 4. Clean up the uploaded file
         if uploaded_file:
             try:
                 yield "\nCleaning up uploaded file on Google AI..."
@@ -384,3 +460,90 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
                 yield "Cleanup complete."
             except Exception as e:
                 yield f"Warning: Could not clean up file {uploaded_file.name}. You may need to delete it manually. Details: {e}"
+
+async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript: str, vertex_config: dict, include_comments: bool):
+    """
+    Runs the automated labeling pipeline using a Vertex AI model.
+    Yields progress updates and the final parsed JSON dictionary of labels.
+    """
+    if vertexai is None:
+        yield "ERROR: 'google-cloud-aiplatform' package not installed. Please install it to use Vertex AI models.\n"
+        return
+
+    project_id = vertex_config.get("project_id")
+    location = vertex_config.get("location", "us-central1")
+    model_name = vertex_config.get("model_name", "gemini-1.5-pro-preview-0409")
+    api_key = vertex_config.get("api_key")
+
+    if not project_id:
+        yield "ERROR: Vertex AI Project ID is required.\n"
+        return
+
+    try:
+        if api_key:
+            yield "NOTE: The API Key field is not used for Vertex AI authentication with this library version.\n"
+            yield "Authentication relies on Application Default Credentials (ADC).\n"
+
+        yield "Initializing Vertex AI using Application Default Credentials...\n"
+        yield "If this fails, run 'docker exec -it videochat_webui gcloud auth application-default login' on your host machine.\n"
+        
+        vertexai.init(project=project_id, location=location)
+        model = GenerativeModel(model_name)
+
+        yield "Vertex AI initialized successfully.\n"
+
+        loop = asyncio.get_event_loop()
+        yield f"Reading video file '{os.path.basename(video_path)}'..."
+        with open(video_path, 'rb') as f:
+            video_bytes = f.read()
+        video_part = Part.from_data(video_bytes, mime_type="video/mp4")
+        yield "Video data prepared for Vertex AI."
+
+        yield "Constructing prompt for Vertex AI model..."
+        if include_comments:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_REASONING,
+                example_json=EXAMPLE_JSON_REASONING
+            )
+        else:
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption,
+                transcript=transcript,
+                score_instructions=SCORE_INSTRUCTIONS_SIMPLE,
+                example_json=EXAMPLE_JSON_SIMPLE
+            )
+        contents = [video_part, prompt_text]
+        
+        yield "Sending request to Vertex AI for analysis and labeling..."
+        
+        generation_config = {"response_mime_type": "application/json"}
+        safety_settings = {
+            generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+        }
+        
+        response = await loop.run_in_executor(
+            None, 
+            lambda: model.generate_content(
+                contents,
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
+        )
+        
+        yield "Received response from Vertex AI. Parsing JSON..."
+        
+        parsed_json = json.loads(response.text)
+        yield "Successfully parsed JSON labels."
+        yield f"--- PARSED LABELS ---\n{json.dumps(parsed_json, indent=2)}\n---------------------\n"
+        yield parsed_json
+            
+    except Exception as e:
+        yield f"ERROR: An error occurred during the Vertex AI labeling process: {e}\n"
+        yield "Authentication may have failed. Please ensure your gcloud credentials are set up correctly.\n"
+        logger.error("Vertex AI labeling pipeline error", exc_info=True)
+        yield None
