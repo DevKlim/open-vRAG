@@ -8,6 +8,7 @@ import csv
 import io
 import datetime
 import json
+import hashlib
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, Response, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -17,18 +18,27 @@ import inference_logic
 import factuality_logic
 import transcription
 from factuality_logic import parse_vtt
+from toon_parser import parse_veracity_toon
 
 # --- CroissantML Imports with error handling ---
 try:
-    from croissant import nodes as cnodes
-    from croissant import Metadata
-    from croissant.data_types import DataType
+    import mlcroissant as cnodes
+    # Depending on the version, Metadata might be top level or under nodes. 
+    # Checking typical usage:
+    from mlcroissant import Metadata, RecordSet, Field, DataType
     CROISSANT_AVAILABLE = True
 except ImportError:
-    cnodes = None
-    Metadata = None
-    DataType = None
-    CROISSANT_AVAILABLE = False
+    try:
+        # Fallback for older/variant naming if strictly needed
+        from croissant import nodes as cnodes
+        from croissant import Metadata
+        from croissant.data_types import DataType
+        CROISSANT_AVAILABLE = True
+    except ImportError:
+        cnodes = None
+        Metadata = None
+        DataType = None
+        CROISSANT_AVAILABLE = False
 # 
 
 #  config application-wide logging 
@@ -38,7 +48,7 @@ logging.basicConfig(
 )
 # 
 
-# Check for LITE_MODE. This will be set by DockerfileLite.
+# Check for LITE_MODE.
 LITE_MODE = os.getenv("LITE_MODE", "false").lower() == "true"
 
 #  fastAPI app setup 
@@ -48,7 +58,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 os.makedirs("videos", exist_ok=True)
 os.makedirs("data", exist_ok=True) # Ensure the data directory for the CSV exists
-os.makedirs("data/labels", exist_ok=True) # Ensure the directory for JSON labels exists
+os.makedirs("data/labels", exist_ok=True) # Ensure the directory for labels exists
 os.makedirs("metadata", exist_ok=True) # Ensure the metadata directory exists
 
 
@@ -111,10 +121,25 @@ async def run_subprocess_async(command: list[str]):
         raise RuntimeError(f"Process failed:\n{error_details}")
     return stdout.decode()
 
+def check_if_processed(link: str) -> bool:
+    """Checks if a link has already been processed in dataset.csv."""
+    dataset_path = Path("data/dataset.csv")
+    if not dataset_path.exists():
+        return False
+    try:
+        with open(dataset_path, 'r', encoding='utf-8', errors='ignore') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get('link') == link:
+                    return True
+    except Exception:
+        return False
+    return False
+
 async def prepare_video_assets_async(url: str) -> dict:
     """
     Downloads video (if URL) or finds local video, then prepares assets including transcription.
-    Returns a dictionary of file paths and extracted metadata using STANDARDIZED keys.
+    Skips download and ffmpeg processing if files already exist.
     """
     global progress_message
     loop = asyncio.get_event_loop()
@@ -131,15 +156,28 @@ async def prepare_video_assets_async(url: str) -> dict:
         if not original_path.exists():
             raise FileNotFoundError(f"Local video file not found at path: {url}")
         metadata = {
-            "id": original_path.stem,
-            "link": url, # Standardized key
-            "caption": original_path.stem, # Standardized key
+            "id": hashlib.md5(str(url).encode('utf-8')).hexdigest()[:16],
+            "link": url,
+            "caption": original_path.stem,
             "likes": 0,
             "shares": 0,
-            "postdatetime": "N/A" # Standardized key
+            "postdatetime": "N/A"
         }
-    else: # It's a URL, download it
-        progress_message = "starting video download...\r"
+    else: # It's a URL
+        # Use yt-dlp to get metadata and ID first without downloading if possible
+        ydl_opts_meta = {'quiet': True, 'noplaylist': True}
+        video_id = "unknown"
+        try:
+             with yt_dlp.YoutubeDL(ydl_opts_meta) as ydl:
+                info_meta = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                video_id = info_meta.get("id")
+        except Exception:
+            # Fallback ID generation if fetch fails but we proceed to download loop
+            video_id = hashlib.md5(url.encode('utf-8')).hexdigest()[:16]
+
+        # Check if we already have the sanitized file for this ID
+        sanitized_check = Path(f"videos/{video_id}_fixed.mp4")
+        
         ydl_opts = {
             'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
             'outtmpl': 'videos/%(id)s.%(ext)s',
@@ -149,64 +187,94 @@ async def prepare_video_assets_async(url: str) -> dict:
             'subtitleslangs': ['en'],
             'quiet': True,
             'noplaylist': True,
+            # Don't download if we already have the sanitized version
+            'no_overwrites': True 
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
-            original_filepath_str = ydl.prepare_filename(info)
-            original_path = Path(original_filepath_str)
-            video_id = info.get("id")
-            video_dir = Path("videos")
-            transcript_path = next(video_dir.glob(f"{video_id}*.en.vtt"), None)
-            if not transcript_path:
-                 transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
-            
-            caption_text = info.get("description", info.get("title", "N/A"))
-            clean_caption = caption_text.encode('ascii', 'ignore').decode('ascii').strip()
 
-            metadata = {
-                "id": info.get("id", "N/A"),
-                "link": info.get("webpage_url", url), # Standardized key
-                "caption": clean_caption, # Standardized key
-                "likes": info.get("like_count", 0),
-                "shares": info.get("repost_count", 0),
-                "postdatetime": info.get("upload_date", "N/A"), # Standardized key (YYYYMMDD)
-            }
+        if sanitized_check.exists():
+            progress_message = "Video already exists locally. Skipping download.\n"
+            # Mock info for metadata
+            info = info_meta if 'info_meta' in locals() else {'id': video_id, 'title': video_id}
+            original_path = Path(f"videos/{video_id}.mp4") # Placeholder, won't be used if sanitized exists
+        else:
+            progress_message = "Starting video download...\r"
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
+                original_filepath_str = ydl.prepare_filename(info)
+                original_path = Path(original_filepath_str)
+        
+        video_id = info.get("id", video_id)
+        video_dir = Path("videos")
+        transcript_path = next(video_dir.glob(f"{video_id}*.en.vtt"), None)
+        if not transcript_path:
+                transcript_path = next(video_dir.glob(f"{video_id}*.vtt"), None)
+        
+        caption_text = info.get("description", info.get("title", "N/A"))
+        clean_caption = caption_text.encode('ascii', 'ignore').decode('ascii').strip()
 
-    progress_message = f"Cleaning video file: {original_path}\n"
-    logging.info(f"Original video path: {original_path}")
-    
-    sanitized_path = original_path.with_name(f"{original_path.stem}_fixed.mp4")
-    ffmpeg_video_command = [
-        "ffmpeg", "-i", str(original_path), "-c:v", "libx264", "-preset", "fast",
-        "-crf", "23", "-c:a", "aac", "-y", str(sanitized_path)
-    ]
-    await run_subprocess_async(ffmpeg_video_command)
-    progress_message = "Video processed. Extracting audio...\n"
+        metadata = {
+            "id": video_id,
+            "link": info.get("webpage_url", url),
+            "caption": clean_caption,
+            "likes": info.get("like_count", 0),
+            "shares": info.get("repost_count", 0),
+            "postdatetime": info.get("upload_date", "N/A"),
+        }
 
-    audio_path = sanitized_path.with_suffix('.wav')
-    try:
-        ffmpeg_audio_command = [
-            "ffmpeg", "-i", str(sanitized_path), "-vn", "-acodec", "pcm_s16le",
-            "-ar", "16000", "-ac", "1", "-y", str(audio_path)
+    # Sanitize Check
+    if original_path:
+        sanitized_path = original_path.with_name(f"{original_path.stem}_fixed.mp4")
+    else:
+        # Fallback for when we skipped download but need path
+        sanitized_path = Path(f"videos/{video_id}_fixed.mp4")
+
+    if sanitized_path.exists():
+        progress_message = f"Using existing sanitized video: {sanitized_path}\n"
+    else:
+        progress_message = f"Cleaning video file: {original_path}\n"
+        if not original_path or not original_path.exists():
+             # This shouldn't happen unless download failed silently or logic error
+             raise FileNotFoundError("Video file not found and cannot be processed.")
+             
+        ffmpeg_video_command = [
+            "ffmpeg", "-i", str(original_path), "-c:v", "libx264", "-preset", "fast",
+            "-crf", "23", "-c:a", "aac", "-y", str(sanitized_path)
         ]
-        await run_subprocess_async(ffmpeg_audio_command)
-        progress_message = "Audio extracted successfully.\n"
-        audio_path_str = str(audio_path)
-    except RuntimeError as e:
-        progress_message = "Could not extract audio. The video might be silent.\n"
-        logging.warning(f"Could not extract audio from {sanitized_path}, continuing without it. Error: {e}")
-        audio_path_str = None
+        await run_subprocess_async(ffmpeg_video_command)
 
+    # Audio Extraction Check
+    audio_path = sanitized_path.with_suffix('.wav')
+    if audio_path.exists():
+         progress_message = "Using existing audio track.\n"
+         audio_path_str = str(audio_path)
+    else:
+        progress_message = "Extracting audio...\n"
+        try:
+            ffmpeg_audio_command = [
+                "ffmpeg", "-i", str(sanitized_path), "-vn", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1", "-y", str(audio_path)
+            ]
+            await run_subprocess_async(ffmpeg_audio_command)
+            audio_path_str = str(audio_path)
+        except RuntimeError as e:
+            logging.warning(f"Could not extract audio from {sanitized_path}: {e}")
+            audio_path_str = None
+
+    # Transcript Check
     if not transcript_path or not Path(transcript_path).exists():
         if LITE_MODE:
-            progress_message = "LITE mode: Local transcription disabled. Relying on existing transcripts.\n"
-            logging.info(progress_message)
+            logging.info("LITE mode: Local transcription disabled.")
         else:
-            progress_message = "No pre-existing transcript found. Generating one locally...\n"
-            logging.info(progress_message)
             if audio_path_str and Path(audio_path_str).exists():
-                generated_vtt_path = await loop.run_in_executor(None, transcription.generate_transcript, audio_path_str)
-                transcript_path = generated_vtt_path if generated_vtt_path else transcript_path
+                # Check if a generated VTT exists matching audio name
+                generated_vtt = audio_path.with_suffix('.vtt')
+                if generated_vtt.exists():
+                    progress_message = "Using existing local transcript.\n"
+                    transcript_path = str(generated_vtt)
+                else:
+                    progress_message = "Generating transcript locally...\n"
+                    generated_vtt_path = await loop.run_in_executor(None, transcription.generate_transcript, audio_path_str)
+                    transcript_path = generated_vtt_path if generated_vtt_path else transcript_path
             else:
                 progress_message = "No audio file found, skipping local transcription.\n"
     else:
@@ -223,12 +291,11 @@ async def prepare_video_assets_async(url: str) -> dict:
 async def process_request_stream(video_url: str, question: str, generation_config: dict, prompts: dict, model_selection: str, checks: dict, gemini_config: dict, vertex_config: dict):
     """
     Generator function that yields progress updates for a single video.
-    Routes to the appropriate model pipeline (Gemini or local).
     """
     global progress_message
     paths = None
     try:
-        # Step 1: Uniformly prepare video assets regardless of the model
+        # Step 1: Prepare assets
         preparation_task = asyncio.create_task(prepare_video_assets_async(video_url))
         while not preparation_task.done():
             yield f"data: {progress_message}\n\n"
@@ -239,7 +306,7 @@ async def process_request_stream(video_url: str, question: str, generation_confi
         if not video_path:
             raise ValueError("Video file could not be prepared.")
 
-        # Step 2: Route to the correct model logic
+        # Step 2: Route to model
         if model_selection == 'gemini':
             yield "data: Using Gemini Model for inference.\n\n"
             async for message in inference_logic.run_gemini_pipeline(video_path, question, checks, gemini_config):
@@ -250,7 +317,7 @@ async def process_request_stream(video_url: str, question: str, generation_confi
                 yield f"data: {message}\n\n"
         else:
             if LITE_MODE:
-                yield "data: ERROR: Local models are not available in this version of the application. Please select a Google Cloud model.\n\n"
+                yield "data: ERROR: Local models are not available in this version.\n\n"
                 return
 
             inference_logic.switch_active_model(model_selection)
@@ -270,9 +337,6 @@ async def process_request_stream(video_url: str, question: str, generation_confi
         error_message = f"\n\n ERROR: \nAn error occurred: {str(e)}"
         logging.error(f"error in processing stream for URL '{video_url}'", exc_info=True)
         yield f"data: {error_message}\n\n"
-    finally:
-        pass
-
 
 @app.post("/process")
 async def process_video_endpoint(
@@ -280,17 +344,14 @@ async def process_video_endpoint(
     video_url: str = Form(...),
     question: str = Form(...),
     model_selection: str = Form("default"),
-
     # gemini params
     gemini_api_key: str = Form(""),
     gemini_model_name: str = Form(""),
-
     # vertex params
     vertex_project_id: str = Form(""),
     vertex_location: str = Form(""),
     vertex_model_name: str = Form(""),
     vertex_api_key: str = Form(""),
-
     # local model params
     num_perceptions: int = Form(...),
     sampling_fps: float = Form(...),
@@ -300,13 +361,11 @@ async def process_video_endpoint(
     repetition_penalty: float = Form(...),
     prompt_glue: str = Form(...),
     prompt_final: str = Form(...),
-    
     # factuality checks
     check_visuals: bool = Form(False),
     check_content: bool = Form(False),
     check_audio: bool = Form(False),
 ):
-    """Endpoint to handle a single video analysis request."""
     generation_config = {
         "num_perceptions": num_perceptions,
         "sampling_fps": sampling_fps,
@@ -328,88 +387,51 @@ async def process_video_endpoint(
     return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
 
 async def generate_and_save_croissant_metadata(row_data: dict) -> str:
-    """
-    Generates and saves a Croissant-ml metadata JSON file for a single row of data.
-    Returns the path to the created file as a string.
-    """
     if not CROISSANT_AVAILABLE:
-        logging.warning("'croissant' library not installed. Skipping metadata generation.")
         return "N/A (croissant library not installed)"
-
     try:
-        # Standardized field names
+        # Setup fields mapping to CSV structure
+        # Note: The exact API for mlcroissant might differ slightly depending on version, 
+        # adapting to standard record set creation.
         fields = [
-            # Tier 1 & 2
-            cnodes.Field(name="id", description="Unique identifier for the video.", data_types=DataType.TEXT),
-            cnodes.Field(name="link", description="URL to the original social media post.", data_types=DataType.URL),
-            cnodes.Field(name="caption", description="Original user-provided caption.", data_types=DataType.TEXT),
-            cnodes.Field(name="likes", description="Number of likes for the post.", data_types=DataType.INTEGER),
-            cnodes.Field(name="shares", description="Number of shares for the post.", data_types=DataType.INTEGER),
-            cnodes.Field(name="postdatetime", description="Original post time of the video.", data_types=DataType.TEXT),
-            cnodes.Field(name="collecttime", description="Timestamp when the data was collected.", data_types=DataType.TEXT),
-            cnodes.Field(name="videotranscriptionpath", description="Path to the VTT transcript file.", data_types=DataType.TEXT),
-
-            # Tier 3: General Labels
-            cnodes.Field(name="videocontext", description="AI-generated summary of the video's content.", data_types=DataType.TEXT),
-            cnodes.Field(name="politicalbias", description="AI score (1-10) for political bias.", data_types=DataType.INTEGER),
-            cnodes.Field(name="criticism", description="AI score (1-10) for criticism level.", data_types=DataType.INTEGER),
-            cnodes.Field(name="videoaudiopairing", description="AI score (1-10) for video-audio alignment.", data_types=DataType.INTEGER),
-            cnodes.Field(name="videocaptionpairing", description="AI score (1-10) for video-caption alignment.", data_types=DataType.INTEGER),
-            cnodes.Field(name="audiocaptionpairing", description="AI score (1-10) for audio-caption alignment.", data_types=DataType.INTEGER),
-
-            # Tier 3: Disinformation Analysis Labels
-            cnodes.Field(name="disinfo_level", description="Classification of misinformation severity.", data_types=DataType.TEXT),
-            cnodes.Field(name="disinfo_intent", description="The inferred intent behind any misinformation.", data_types=DataType.TEXT),
-            cnodes.Field(name="disinfo_threat_vector", description="The specific technique used for deception.", data_types=DataType.TEXT),
-            cnodes.Field(name="disinfo_emotional_charge", description="AI score (1-10) for how emotionally charged the content is.", data_types=DataType.INTEGER),
-            cnodes.Field(name="disinfo_targets_cognitive_bias", description="Boolean indicating if content targets cognitive biases.", data_types=DataType.BOOL),
-            cnodes.Field(name="disinfo_promotes_tribalism", description="Boolean indicating if content promotes an 'us vs. them' mentality.", data_types=DataType.BOOL),
+            Field(name="id", description="Unique identifier.", data_types=DataType.TEXT),
+            Field(name="link", description="URL.", data_types=DataType.URL),
+            Field(name="visual_integrity_score", description="Score 1-10", data_types=DataType.INTEGER),
+            Field(name="audio_integrity_score", description="Score 1-10", data_types=DataType.INTEGER),
+            Field(name="source_credibility_score", description="Score 1-10", data_types=DataType.INTEGER),
+            Field(name="logical_consistency_score", description="Score 1-10", data_types=DataType.INTEGER),
+            Field(name="emotional_manipulation_score", description="Score 1-10", data_types=DataType.INTEGER),
+            Field(name="final_veracity_score", description="Total score.", data_types=DataType.INTEGER),
+            Field(name="grounding_check", description="RAG results.", data_types=DataType.TEXT),
         ]
-
         temp_csv = io.StringIO()
         fieldnames = [f.name for f in fields]
         writer = csv.DictWriter(temp_csv, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerow(row_data)
 
-        record_set = cnodes.RecordSet(
-            name="video_metadata_record",
-            description="A single record of labels and metadata for one social media video.",
-            fields=fields,
-            data=temp_csv.getvalue()
-        )
-
+        record_set = RecordSet(name="video_metadata_record", fields=fields, data=temp_csv.getvalue())
         video_id = row_data.get('id', 'unknown_video')
         timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
         link_url = row_data.get('link', f"http://vchat-dataset.org/data/{video_id}/{timestamp}")
-
-        distribution = [cnodes.FileObject(name=f"source_video_url_{video_id}", encoding_format="text/html", content_url=link_url)]
+        
+        # distribution = [FileObject(name=f"source_video_url_{video_id}", encoding_format="text/html", content_url=link_url)]
 
         croissant_metadata = Metadata(
             name=f"vchat-label-{video_id}",
-            description=f"Croissant metadata for video ID {video_id} generated on {timestamp}.",
-            url=link_url, distribution=distribution, record_sets=[record_set],
+            url=link_url, 
+            record_sets=[record_set],
         )
-
-        metadata_dir = Path("metadata")
-        metadata_filename = f"{video_id}_{timestamp}.json"
-        metadata_path = metadata_dir / metadata_filename
-
+        metadata_path = Path("metadata") / f"{video_id}_{timestamp}.json"
         loop = asyncio.get_event_loop()
         json_content = croissant_metadata.to_json()
         await loop.run_in_executor(None, lambda: metadata_path.write_text(json.dumps(json_content, indent=2)))
-
-        logging.info(f"Croissant metadata saved to {metadata_path}")
         return str(metadata_path)
-
     except Exception as e:
-        logging.error(f"Failed to generate or save Croissant metadata: {e}", exc_info=True)
+        logging.error(f"Metadata error: {e}")
         return f"Error generating metadata: {e}"
 
 async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
-    """
-    Prepares a video, gets labels, and returns a dictionary of results with standardized keys.
-    """
     global progress_message
     paths = None
     try:
@@ -429,61 +451,68 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             raise ValueError("Video file could not be prepared.")
         
         yield "Step 2: Reading audio transcript..."
-        transcript_text = "No transcript available for this video."
+        transcript_text = "No transcript available."
         if transcript_path:
             transcript_text = parse_vtt(transcript_path)
             yield "  - Transcript found and parsed."
         
         caption = metadata.get("caption", "No caption available.")
-        yield f"Step 3: Sending video and context to {model_selection.capitalize()} for labeling..."
+        yield f"Step 3: Sending to {model_selection.capitalize()} for Veracity Vector Analysis..."
         
         final_labels = None
+        raw_toon_text = ""
+        
         if model_selection == 'gemini':
             async for message in inference_logic.run_gemini_labeling_pipeline(video_path, caption, transcript_text, gemini_config, include_comments):
-                if isinstance(message, dict): final_labels = message
-                elif isinstance(message, str): yield message.replace(os.linesep, ' ')
+                if isinstance(message, dict) and "parsed_data" in message:
+                    final_labels = message["parsed_data"]
+                    raw_toon_text = message.get("raw_toon", "")
+                elif isinstance(message, str): 
+                    yield message.replace(os.linesep, ' ')
         elif model_selection == 'vertex':
             async for message in inference_logic.run_vertex_labeling_pipeline(video_path, caption, transcript_text, vertex_config, include_comments):
-                if isinstance(message, dict): final_labels = message
-                elif isinstance(message, str): yield message.replace(os.linesep, ' ')
+                if isinstance(message, dict) and "parsed_data" in message: 
+                    final_labels = message["parsed_data"]
+                    raw_toon_text = message.get("raw_toon", "")
+                elif isinstance(message, str): 
+                    yield message.replace(os.linesep, ' ')
 
         if final_labels is None:
-            raise RuntimeError(f"Failed to get parsed labels from the {model_selection.capitalize()} pipeline.")
+            raise RuntimeError("Failed to get parsed labels.")
 
-        def get_score(value):
-            """Safely extracts the score, whether it's a direct value or in a nested dict."""
-            if isinstance(value, dict):
-                return value.get('score', '')
-            return value
-
+        veracity_vectors = final_labels.get("veracity_vectors", {})
+        factuality_factors = final_labels.get("factuality_factors", {})
         disinfo_analysis = final_labels.get("disinformation_analysis", {})
-        sentiment_tactics = disinfo_analysis.get("sentiment_and_bias_tactics", {})
+        final_assessment = final_labels.get("final_assessment", {})
+
+        # ALGORITHMIC ID GENERATION
+        # Ensure we have a valid ID. If metadata lacks it or is 'unknown', generate one hash-based.
+        video_id = metadata.get("id", "")
+        if not video_id or video_id == "unknown":
+            video_id = hashlib.md5(video_url.encode("utf-8")).hexdigest()[:16]
 
         output_row_data = {
-            "id": metadata.get("id", ""),
+            "id": video_id,
             "link": metadata.get("link", video_url),
             "caption": metadata.get("caption", ""),
-            "likes": metadata.get("likes", 0),
-            "shares": metadata.get("shares", 0),
             "postdatetime": metadata.get("postdatetime", ""),
             "collecttime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "videotranscriptionpath": transcript_path or "",
-            "videocontext": final_labels.get("video_context_summary", ""),
-            "politicalbias": get_score(final_labels.get("political_bias", "")),
-            "criticism": get_score(final_labels.get("criticism_level", "")),
-            "videoaudiopairing": get_score(final_labels.get("video_audio_pairing", "")),
-            "videocaptionpairing": get_score(final_labels.get("video_caption_pairing", "")),
-            "audiocaptionpairing": get_score(final_labels.get("audio_caption_pairing", "")),
-            
-            "disinfo_level": disinfo_analysis.get("disinformation_level", ""),
-            "disinfo_intent": disinfo_analysis.get("disinformation_intent", ""),
+            "video_context_summary": final_labels.get("video_context_summary", ""),
+            "visual_integrity_score": veracity_vectors.get("visual_integrity_score", ""),
+            "audio_integrity_score": veracity_vectors.get("audio_integrity_score", ""),
+            "source_credibility_score": veracity_vectors.get("source_credibility_score", ""),
+            "logical_consistency_score": veracity_vectors.get("logical_consistency_score", ""),
+            "emotional_manipulation_score": veracity_vectors.get("emotional_manipulation_score", ""),
+            "claim_accuracy": factuality_factors.get("claim_accuracy", ""),
+            "grounding_check": factuality_factors.get("grounding_check", ""),
+            "disinfo_classification": disinfo_analysis.get("classification", ""),
+            "disinfo_intent": disinfo_analysis.get("intent", ""),
             "disinfo_threat_vector": disinfo_analysis.get("threat_vector", ""),
-            "disinfo_emotional_charge": sentiment_tactics.get("emotional_charge", ""),
-            "disinfo_targets_cognitive_bias": sentiment_tactics.get("targets_cognitive_bias", ""),
-            "disinfo_promotes_tribalism": sentiment_tactics.get("promotes_tribalism", "")
+            "final_veracity_score": final_assessment.get("veracity_score_total", ""),
+            "final_reasoning": final_assessment.get("reasoning", "")
         }
-        
-        yield {"csv_row": output_row_data, "full_json": final_labels}
+        yield {"csv_row": output_row_data, "full_json": final_labels, "raw_toon": raw_toon_text}
 
     except Exception as e:
         error_message = f"ERROR in get_labels_for_link for {video_url}: {str(e)}"
@@ -492,8 +521,13 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
 
 async def process_labeling_stream(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
     """
-    Generator function for the automated labeling of a SINGLE video, appending to dataset.csv.
+    Automated labeling with existence check in dataset.csv.
     """
+    # Check if already processed
+    if check_if_processed(video_url):
+         yield f"data: SKIPPING: This link ({video_url}) has already been processed in data/dataset.csv.\n\n"
+         return
+
     final_data = None
     async for result in get_labels_for_link(video_url, gemini_config, vertex_config, model_selection, include_comments):
         if isinstance(result, str):
@@ -509,41 +543,38 @@ async def process_labeling_stream(video_url: str, gemini_config: dict, vertex_co
         return
     
     final_row_data = final_data["csv_row"]
-    full_labels_json = final_data["full_json"]
+    full_labels_data = final_data["full_json"]
+    raw_toon_text = final_data.get("raw_toon", "")
     
-    # Save the full JSON analysis to its own file
     labels_dir = Path("data/labels")
     video_id = final_row_data.get('id', 'unknown_video')
     timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-    json_filename = f"{video_id}_{timestamp}_labels.json"
-    json_path = labels_dir / json_filename
+    
+    # Save JSON
+    json_path = labels_dir / f"{video_id}_{timestamp}_labels.json"
     with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(full_labels_json, f, indent=2, ensure_ascii=False)
-    yield f"data: Step 4: Full analysis with reasoning saved to {json_path}\n\n"
+        json.dump(full_labels_data, f, indent=2, ensure_ascii=False)
+        
+    # Save raw TOON file
+    toon_path = labels_dir / f"{video_id}_{timestamp}.toon"
+    with open(toon_path, 'w', encoding='utf-8') as f:
+        f.write(raw_toon_text)
 
-    yield "data: Step 5: Generating metadata...\n\n"
+    yield f"data: Step 4: Full analysis saved to {json_path} and {toon_path}\n\n"
+
     metadatapath_value = await generate_and_save_croissant_metadata(final_row_data)
     final_row_data["metadatapath"] = metadatapath_value
-    if "Error" in metadatapath_value:
-        yield f"data:   - WARNING: {metadatapath_value}\n\n"
-    else:
-        yield f"data:   - Croissant metadata successfully saved to {metadatapath_value}\n\n"
-
+    
     dataset_path = Path("data/dataset.csv")
-    yield f"data: Step 6: Appending data to persistent dataset at {dataset_path}...\n\n"
-    
     all_headers = list(dict.fromkeys(list(final_row_data.keys()) + ["metadatapath"]))
-    
     file_exists = dataset_path.is_file() and dataset_path.stat().st_size > 0
+    
     with open(dataset_path, 'a', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=all_headers, extrasaction='ignore')
-        if not file_exists:
-            writer.writeheader()
+        if not file_exists: writer.writeheader()
         writer.writerow(final_row_data)
     
-    yield f"data: Successfully appended a new record to {dataset_path}.\n"
-    yield "data: \nLabeling process complete.\n"
-
+    yield f"data: Successfully appended new record to {dataset_path}.\n"
 
 @app.post("/label_video")
 async def label_video_endpoint(
@@ -557,21 +588,11 @@ async def label_video_endpoint(
     vertex_api_key: str = Form(""),
     include_comments: bool = Form(False),
 ):
-    """Endpoint to handle the automated video labeling process for a single video."""
     gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
     vertex_config = {"project_id": vertex_project_id, "location": vertex_location, "model_name": vertex_model_name, "api_key": vertex_api_key}
     
     if model_selection == 'gemini' and not gemini_api_key:
-        async def error_stream():
-            yield "data: ERROR: Gemini API Key is required for this feature.\n\n"
-            yield "event: close\ndata: Task finished.\n\n"
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
-    if model_selection == 'vertex' and not vertex_project_id:
-        async def error_stream():
-            yield "data: ERROR: Vertex AI Project ID is required for this feature.\n\n"
-            yield "event: close\ndata: Task finished.\n\n"
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
-
+        return Response("Error: Gemini API Key required", status_code=400)
 
     async def stream_wrapper():
         async for message in process_labeling_stream(video_url, gemini_config, vertex_config, model_selection, include_comments):
@@ -580,130 +601,85 @@ async def label_video_endpoint(
 
     return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
 
-
 @app.get("/download-dataset", response_class=FileResponse)
 async def download_dataset():
-    """Provides the main dataset CSV file for download."""
     dataset_path = Path("data/dataset.csv")
     if not dataset_path.exists():
-        return Response(content="Dataset file not found. Generate some labels first.", status_code=404)
-    return FileResponse(
-        path=dataset_path,
-        filename="dataset.csv",
-        media_type='text/csv'
-    )
+        return Response(content="Dataset file not found.", status_code=404)
+    return FileResponse(path=dataset_path, filename="dataset.csv", media_type='text/csv')
 
 async def process_batch_labeling_stream(csv_file: UploadFile, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
-    """
-    Processes a CSV, appends new, labeled data to a persistent `data/dataset.csv`,
-    and generates metadata. Skips links that are already processed.
-    """
-    yield f"data: Batch labeling process started with {model_selection.capitalize()}. Results will be appended to data/dataset.csv.\n\n"
-    
+    yield f"data: Batch labeling started. Using {model_selection}.\n\n"
     dataset_path = Path("data/dataset.csv")
     processed_links = set()
-    try:
-        if dataset_path.exists() and dataset_path.stat().st_size > 0:
+    
+    if dataset_path.exists() and dataset_path.stat().st_size > 0:
+        try:
             with open(dataset_path, 'r', newline='', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    if row.get('link') and row.get('videocontext'):
-                        processed_links.add(row['link'])
-            yield f"data: Found {len(processed_links)} previously processed links in {dataset_path}.\n\n"
-        else:
-            yield f"data: No existing dataset found at {dataset_path}. A new one will be created.\n\n"
-    except Exception as e:
-        yield f"data: WARNING: Could not read existing dataset.csv. Error: {e}\n\n"
+                    if row.get('link'): processed_links.add(row['link'])
+            yield f"data: Found {len(processed_links)} processed links.\n\n"
+        except Exception as e:
+            yield f"data: Warning reading dataset: {e}\n\n"
 
     try:
         contents = await csv_file.read()
         decoded_content = contents.decode('utf-8', errors='ignore')
         reader = csv.DictReader(io.StringIO(decoded_content))
-        
-        original_headers = reader.fieldnames or []
-        if 'link' not in original_headers:
-            yield "data: FATAL ERROR: Uploaded CSV must contain a header with a 'link' column.\n\n"
-            return
-        
         input_rows = [row for row in reader if row.get('link')]
         
-        label_columns = [
-            "id", "link", "caption", "likes", "shares", "postdatetime", "collecttime", 
-            "videotranscriptionpath", "videocontext", "politicalbias", "criticism", 
-            "videoaudiopairing", "videocaptionpairing", "audiocaptionpairing", 
-            "disinfo_level", "disinfo_intent", "disinfo_threat_vector", 
-            "disinfo_emotional_charge", "disinfo_targets_cognitive_bias", 
-            "disinfo_promotes_tribalism", "metadatapath"
-        ]
-        output_headers = list(dict.fromkeys(original_headers + label_columns))
-
-        yield f"data: Found {len(input_rows)} rows with links in the uploaded CSV to process.\n\n"
-        new_records_appended = 0
         for i, row in enumerate(input_rows):
             link = row.get('link')
-            yield f"data: ==================================================================\n"
-            yield f"data: Processing Video {i+1}/{len(input_rows)}: {link}\n"
-            yield f"data: ==================================================================\n\n"
+            yield f"data: Processing {i+1}/{len(input_rows)}: {link}\n"
             
             if link in processed_links:
-                yield f"data:   -> SKIPPING: This link has already been processed in dataset.csv.\n\n"
+                yield f"data:   -> SKIPPING: Already in dataset.\n\n"
                 continue
 
             label_data_packet = None
             async for result in get_labels_for_link(link, gemini_config, vertex_config, model_selection, include_comments):
-                if isinstance(result, str):
-                    yield f"data:   {result}\n"
-                elif isinstance(result, dict):
-                    label_data_packet = result
+                if isinstance(result, dict): label_data_packet = result
             
             if label_data_packet and "error" not in label_data_packet:
                 csv_row = label_data_packet["csv_row"]
-                full_labels_json = label_data_packet["full_json"]
                 full_row_data = row.copy()
                 full_row_data.update(csv_row)
-                yield f"data: \n  -> Successfully generated labels for {link}.\n"
+                raw_toon_text = label_data_packet.get("raw_toon", "")
                 
                 labels_dir = Path("data/labels")
-                video_id = csv_row.get('id', f'unknown_batch_{i+1}')
+                video_id = csv_row.get('id', f'batch_{i}')
                 timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-                json_filename = f"{video_id}_{timestamp}_labels.json"
-                json_path = labels_dir / json_filename
-                with open(json_path, 'w', encoding='utf-8') as f:
-                    json.dump(full_labels_json, f, indent=2, ensure_ascii=False)
-                yield f"data:   -> Full analysis with reasoning saved to {json_path}\n"
                 
-                yield f"data:   -> Generating Croissant metadata...\n"
+                # Save JSON
+                with open(labels_dir / f"{video_id}_{timestamp}_labels.json", 'w', encoding='utf-8') as f:
+                    json.dump(label_data_packet["full_json"], f, indent=2, ensure_ascii=False)
+                
+                # Save TOON
+                with open(labels_dir / f"{video_id}_{timestamp}.toon", 'w', encoding='utf-8') as f:
+                    f.write(raw_toon_text)
+
+                # Metadata
                 metadata_path = await generate_and_save_croissant_metadata(full_row_data)
                 full_row_data['metadatapath'] = metadata_path
-                if "Error" in metadata_path:
-                     yield f"data:   -> WARNING: {metadata_path}\n\n"
-                else:
-                     yield f"data:   -> Metadata saved to: {metadata_path}\n\n"
                 
+                # Append CSV
                 file_exists = dataset_path.is_file() and dataset_path.stat().st_size > 0
                 with open(dataset_path, 'a', newline='', encoding='utf-8') as f:
+                    output_headers = list(dict.fromkeys(list(full_row_data.keys()) + ["metadatapath"]))
                     writer = csv.DictWriter(f, fieldnames=output_headers, extrasaction='ignore')
-                    if not file_exists:
-                        writer.writeheader()
+                    if not file_exists: writer.writeheader()
                     writer.writerow(full_row_data)
                 
-                new_records_appended += 1
-                yield f"data:   -> SUCCESS: Appended new record to {dataset_path}.\n\n"
+                yield f"data:   -> Success. Appended to dataset.\n\n"
             else:
-                error_msg = label_data_packet.get('error', 'An unknown error occurred.') if label_data_packet else 'An unknown error occurred.'
-                yield f"data: \n  -> FAILED to process {link}. Reason: {error_msg}\n\n"
-
-        yield "data: \n\n================================\n"
-        yield f"data: Batch processing complete. Appended {new_records_appended} new records to {dataset_path}.\n"
-        yield "data: ================================\n\n"
+                err = label_data_packet.get('error', 'unknown') if label_data_packet else 'Failed'
+                yield f"data:   -> FAILED: {err}\n\n"
 
     except Exception as e:
-        error_message = f"\n\nFATAL BATCH ERROR: {str(e)}"
-        logging.error("A fatal error occurred during batch labeling.", exc_info=True)
-        yield f"data: {error_message}\n\n"
+        yield f"data: FATAL BATCH ERROR: {e}\n\n"
     finally:
         yield "event: close\ndata: Task finished.\n\n"
-
 
 @app.post("/batch_label")
 async def batch_label_endpoint(
@@ -717,20 +693,11 @@ async def batch_label_endpoint(
     vertex_api_key: str = Form(""),
     include_comments: bool = Form(False),
 ):
-    """Endpoint to handle batch video labeling, appending to a persistent dataset."""
     gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
     vertex_config = {"project_id": vertex_project_id, "location": vertex_location, "model_name": vertex_model_name, "api_key": vertex_api_key}
 
     if model_selection == 'gemini' and not gemini_api_key:
-        async def error_stream():
-            yield "data: ERROR: Gemini API Key is required for batch auto-labeling.\n\n"
-            yield "event: close\ndata: Task finished.\n\n"
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
-    if model_selection == 'vertex' and not vertex_project_id:
-        async def error_stream():
-            yield "data: ERROR: Vertex AI Project ID is required for batch auto-labeling.\n\n"
-            yield "event: close\ndata: Task finished.\n\n"
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
+         return Response("Error: Gemini API Key required", status_code=400)
 
     return StreamingResponse(
         process_batch_labeling_stream(csv_file, gemini_config, vertex_config, model_selection, include_comments),

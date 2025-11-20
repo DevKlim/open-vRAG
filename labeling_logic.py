@@ -1,99 +1,85 @@
+# labeling_logic.py
+# Prompts optimized for Ali Arsanjani's Factuality Factors and Veracity Vectors.
+# Now utilizes TOON (Token-Oriented Object Notation) for token efficiency and constraint enforcement.
+
 LABELING_PROMPT_TEMPLATE = """
-You are an expert media analyst and threat intelligence researcher creating a dataset for social media analysis. Your task is to analyze the provided video and its context to generate objective, structured labels.
+You are an AI Factuality Assessment Agent operating under the "Ali Arsanjani Factuality Factors" framework. 
+Your goal is to mass-label video content, quantifying "Veracity Vectors".
 
-**Analysis Task:**
-Holistically analyze the provided video file, its accompanying user caption, and the full audio transcription. Based on all three sources, generate a single JSON object containing the following labels.
+**INPUT DATA:**
+- **User Caption:** "{caption}"
+- **Audio Transcript:** "{transcript}"
+- **Visuals:** (Provided in video context)
 
-**Part 1: General Content Labels**
-1.  `video_context_summary`: A brief, neutral, one to two-sentence summary describing the main events, subject, and setting of the video.
+**INSTRUCTIONS:**
+1.  **Grounding:** Cross-reference claims in the transcript with your internal knowledge base (and tools if active).
+2.  **Chain of Thought (<thinking>):** You MUST think step-by-step inside a `<thinking>` block before generating output.
+    *   Analyze *Visual Integrity* (Artifacts, edits).
+    *   Analyze *Audio Integrity* (Voice cloning, sync).
+    *   Analyze *Logic* (Fallacies, gaps).
+    *   Determine *Disinformation* classification.
+3.  **Output Format:** Output strictly in **TOON** format (Token-Oriented Object Notation) as defined below.
+
+**CRITICAL CONSTRAINTS:** 
+- Do NOT repeat the input data (User Caption or Transcript) in your response.
+- START your response IMMEDIATELY with the `<thinking>` tag.
+- **DO NOT use Markdown code blocks.**
+- **DO NOT use function-call syntax (e.g., scores(...)).**
+- **DO NOT output raw CSV.**
+- Use strict `Key: Value` lines as shown in the schema.
+
+**TOON SCHEMA (Strict Format):**
+Use the headers exactly as shown. Values should be comma-separated. Text with commas must be in quotes.
+
+summary: text[1]{{text}}:
+"Brief neutral summary of the video events"
+
+vectors: scores[5]{{visual,audio,source,logic,emotion}}:
+(Int 1-10), (Int 1-10), (Int 1-10), (Int 1-10), (Int 1-10)
+*Scale: 1=Fake/Malicious, 10=Authentic/Neutral*
+
+factuality: factors[3]{{accuracy,gap,grounding}}:
+(Verified/Misleading/False), "Missing evidence description", "Grounding check results"
+
+disinfo: analysis[3]{{class,intent,threat}}:
+(None/Misinfo/Disinfo/Satire), (Political/Commercial/None), (Deepfake/Recontextualization/None)
+
+final: assessment[2]{{score,reasoning}}:
+(Int 1-100), "Final synthesis of why this score was given"
+
 {score_instructions}
 
-**Part 2: Disinformation & Manipulation Analysis**
-Create a nested JSON object for the key `disinformation_analysis`. This object should contain the following four fields to classify the nature and intent of any potential misinformation.
-
-7.  `disinformation_analysis`: A nested JSON object containing:
-    a. `disinformation_level` (string): Classify the severity and intentionality. Choose ONE of the following:
-        - "No Misinformation": Content appears factual and consistent.
-        - "Unintentional Misinformation": Contains errors but lacks malicious intent (e.g., outdated info, genuine mistake).
-        - "Manipulated Content": Content is altered or presented out of context to create a false narrative (e.g., half-truths, misleading edits).
-        - "Deliberate Disinformation": Fabricated content created with malicious intent to deceive, harm, or manipulate.
-    b. `disinformation_intent` (string): Identify the primary goal behind the disinformation. Choose ONE of the following:
-        - "None": No discernible manipulative intent.
-        - "Commercial": To sell a product or generate clickbait revenue.
-        - "Political": To sway political opinion or attack a political entity.
-        - "Social": To incite social unrest, promote tribalism, or harass a group.
-        - "State-Sponsored": Suspected of being part of a sovereign nation's influence campaign.
-    c. `threat_vector` (string): Describe the method of deception. Choose ONE of the following:
-        - "None": No deceptive technique used.
-        - "False Context": Genuine content shared with a misleading story.
-        - "Imposter Content": Impersonating a genuine source.
-        - "Manipulated Visuals/Audio": Visuals or audio have been altered (e.g., photoshopped, edited video, AI-generated).
-        - "Fabricated Narrative": A completely false story or claim.
-    d. `sentiment_and_bias_tactics`: A nested object analyzing the psychological approach:
-        - `emotional_charge` (integer): Score from 1 (calm, neutral, factual) to 10 (highly emotional, inflammatory, designed to provoke a strong reaction).
-        - `targets_cognitive_bias` (boolean): `true` if the content seems designed to exploit biases like confirmation bias, groupthink, or fear.
-        - `promotes_tribalism` (boolean): `true` if the content creates a strong "us vs. them" narrative, reinforcing an in-group identity while demonizing an out-group.
-
-**Provided Information for Analysis:**
-- **Uploader's Caption:** "{caption}"
-- **Audio Transcription:** "{transcript}"
-- The video file itself will also be provided for your analysis.
-
-**Instructions:**
-- Respond ONLY with a single, valid JSON object. Do not include any other text, explanations, or markdown formatting.
-
-Example of a valid response:
-{example_json}
+**RESPONSE:**
+<thinking>
 """
 
-SCORE_INSTRUCTIONS_REASONING = """2.  `political_bias`: A nested JSON object with `score` (integer 1-10, where 1 is biased, 10 is neutral) and `reasoning` (a brief string explaining the score).
-3.  `criticism_level`: A nested JSON object with `score` (integer 1-10, where 1 is aggressive, 10 is neutral) and `reasoning`.
-4.  `video_audio_pairing`: A nested JSON object with `score` (integer 1-10, where 1 is a mismatch, 10 is perfect alignment) and `reasoning`.
-5.  `video_caption_pairing`: A nested JSON object with `score` (integer 1-10, where 1 is a mismatch, 10 is perfect alignment) and `reasoning`.
-6.  `audio_caption_pairing`: A nested JSON object with `score` (integer 1-10, where 1 is a mismatch, 10 is perfect alignment) and `reasoning`."""
-
-SCORE_INSTRUCTIONS_SIMPLE = """2.  `political_bias`: A score from 1 to 10, where 1 means the content is heavily biased and promotes a specific political ideology, and 10 means the content is neutral and objective.
-3.  `criticism_level`: A score from 1 to 10, where 1 means strong, direct, and aggressive criticism of a person, group, or idea, and 10 means the content is purely informational, neutral, or positive with no criticism.
-4.  `video_audio_pairing`: A score from 1 to 10 assessing the alignment of video visuals and audio. 1 means a complete mismatch. 10 means the audio perfectly describes the video.
-5.  `video_caption_pairing`: A score from 1 to 10 assessing the alignment of video visuals and the text caption. 1 means the caption is irrelevant or contradictory. 10 means the caption is an accurate description.
-6.  `audio_caption_pairing`: A score from 1 to 10 assessing the alignment of the spoken audio and the text caption. 1 means they are unrelated. 10 means the caption is a direct quote or perfect summary."""
-
-
-EXAMPLE_JSON_REASONING = """{{
-  "video_context_summary": "A political commentator discusses a recent policy change, showing clips of protests.",
-  "political_bias": {{ "score": 2, "reasoning": "The commentator uses emotionally charged language and only presents views that support their argument." }},
-  "criticism_level": {{ "score": 3, "reasoning": "The content is highly critical of the policy without acknowledging any potential benefits or alternative viewpoints." }},
-  "video_audio_pairing": {{ "score": 7, "reasoning": "The audio narration generally matches the theme of the protest clips, but some clips may be out of context." }},
-  "video_caption_pairing": {{ "score": 8, "reasoning": "The caption accurately summarizes the video's main point from the creator's perspective." }},
-  "audio_caption_pairing": {{ "score": 9, "reasoning": "The caption reflects the tone and main arguments made by the narrator in the audio." }},
-  "disinformation_analysis": {{
-    "disinformation_level": "Manipulated Content",
-    "disinformation_intent": "Political",
-    "threat_vector": "False Context",
-    "sentiment_and_bias_tactics": {{
-      "emotional_charge": 8,
-      "targets_cognitive_bias": true,
-      "promotes_tribalism": true
-    }}
-  }}
-}}"""
-
-EXAMPLE_JSON_SIMPLE = """{{
-  "video_context_summary": "A political commentator discusses a recent policy change, showing clips of protests.",
-  "political_bias": 2,
-  "criticism_level": 3,
-  "video_audio_pairing": 7,
-  "video_caption_pairing": 8,
-  "audio_caption_pairing": 9,
-  "disinformation_analysis": {{
-    "disinformation_level": "Manipulated Content",
-    "disinformation_intent": "Political",
-    "threat_vector": "False Context",
-    "sentiment_and_bias_tactics": {{
-      "emotional_charge": 8,
-      "targets_cognitive_bias": true,
-      "promotes_tribalism": true
-    }}
-  }}
-}}
+SCORE_INSTRUCTIONS_REASONING = """
+**Constraints:** 
+1. Refer to specific timestamps or visual details in `<thinking>`.
+2. In TOON, ensure strings are quoted if they contain commas.
 """
+
+SCORE_INSTRUCTIONS_SIMPLE = """
+**Constraint:** Focus on objective measurements. Keep text concise.
+"""
+
+# ICL Example: Demonstrates TOON to the model
+EXAMPLE_JSON_REASONING = """<thinking>
+1. Visuals: Lip-sync is off by 0.5s. Shadows on face don't match background. (Score: 3)
+2. Audio: Voice has metallic robotic artifacting. (Score: 2)
+3. Logic: Claims "gravity was invented in 1990". False. (Score: 1)
+4. Emotion: Uses screaming audio. (Score: 2)
+</thinking>
+summary: text[1]{text}:
+"Video depicts a politician making scientifically impossible claims about gravity."
+vectors: scores[5]{visual,audio,source,logic,emotion}:
+3,2,1,1,2
+factuality: factors[3]{accuracy,gap,grounding}:
+False,"Scientific impossibility","Physics laws refute claim"
+disinfo: analysis[3]{class,intent,threat}:
+Disinfo,Social,Deepfake
+final: assessment[2]{score,reasoning}:
+18,"Heavily manipulated deepfake with false claims intended to confuse."
+"""
+
+EXAMPLE_JSON_SIMPLE = EXAMPLE_JSON_REASONING

@@ -1,28 +1,25 @@
-# /docker-compose.yml
 services:
   videochat_webui:
     build: .
     container_name: videochat_webui
-    # The --reload flag enables auto-reloading for development
+    # Use standard python command (mapped to /opt/conda/bin/python in this image)
     command: python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8005:8000"
+    
+    # OPTIMIZATION: PyTorch DataLoaders crash without shared memory.
+    shm_size: '8gb'
+
     volumes:
-      # Mount the current directory for live code changes
+      # Mount source code (Hot Reloading)
       - .:/app
 
-      # Mount a local directory for downloaded videos
+      # Persist Data
       - ./videos:/app/videos
-
-      # Mount a local directory for datasets
       - ./data:/app/data
-
-      # Mount your pre-downloaded model to avoid downloading it on startup.
-      # This is the most effective way to ensure fast startup and avoid Hugging Face downloads.
       - ./model:/app/local_model
-
-      # Add a named volume to persist Google Cloud credentials
       - gcloud_config:/root/.config/gcloud
+
     deploy:
       resources:
         reservations:
@@ -30,9 +27,9 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    
     stdin_open: true
     tty: true
 
-# Define the named volume for gcloud credentials
 volumes:
   gcloud_config:
