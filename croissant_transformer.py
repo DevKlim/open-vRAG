@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import os
 import datetime
+import sys
 
 # input dataframe row
 # output croissant json
@@ -124,3 +125,13 @@ def croissant_transform(file_path):
 
     print("Conversion Finished")
     return
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python croissant_transformer.py <input_csv_path>")
+        sys.exit(1)
+
+    input_csv_path = sys.argv[1]
+    croissant_transform(input_csv_path)
+
