@@ -1,47 +1,41 @@
-
-# Core model dependencies
+torch
+torchvision
+torchaudio
+# --- Core Server ---
+fastapi
+uvicorn[standard]
 python-multipart
+requests
+aiofiles
+jinja2
+
+# --- AI & Vision Processing ---
 transformers
 accelerate
-# torch, torchvision, and torchaudio are already in the base Docker image
-
-# Vision processing dependencies from my_vision_process.py
 Pillow
-requests
 packaging
 av
-opencv-python
+# Use headless to avoid installing X11/GL libraries in Docker
+opencv-python-headless
 decord
 imageio
 numpy
 einops
 
-# Web UI and video pipeline dependencies
-fastapi
-uvicorn[standard]
-jinja2
-yt-dlp
-aiofiles
-uv
-
-# Gemini API Client
+# --- Google Cloud & APIs ---
 google-generativeai
-
-# Vertex AI API Client
 google-cloud-aiplatform
+google-genai
+# CORRECTED: The ML Croissant library package name
+mlcroissant
 
-# --- Fine-tuning Dependencies ---
-# PEFT for Low-Rank Adaptation (LoRA)
+# --- Fine-Tuning (LoRA/QLoRA) ---
 peft
-# For memory-efficient training (e.g., 4-bit quantization)
+# Bitsandbytes 0.44+ 
 bitsandbytes
-# Simplified training library from Hugging Face
 trl
-# For loading datasets
 datasets
 
-# --- Metadata Generation ---
-croissant
-
-# --- Audio Transcription ---
+# --- Audio ---
 openai-whisper
+yt-dlp

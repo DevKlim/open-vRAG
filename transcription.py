@@ -1,12 +1,19 @@
 import whisper
 import logging
 from pathlib import Path
+import os
+
+LITE_MODE = os.getenv("LITE_MODE", "false").lower() == "true"
 
 logger = logging.getLogger(__name__)
 transcription_model = None
 
 def load_model():
     """Loads the Whisper transcription model."""
+    if LITE_MODE:
+        logger.info("LITE_MODE is enabled. Skipping Whisper model loading.")
+        return
+
     global transcription_model
     if transcription_model is None:
         try:

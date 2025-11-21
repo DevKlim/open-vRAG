@@ -25,6 +25,13 @@ build/
 videos/
 huggingface_cache/
 model/
+local_model/
+
+
+# Ignore heavy training data not needed for inference app
+clickbaitDataAndTraining/
+*.csv
+!data/dataset.csv
 
 # Ignore notebooks from build context
 *.ipynb

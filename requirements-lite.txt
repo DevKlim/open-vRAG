@@ -1,0 +1,38 @@
+# requirements-lite.txt
+# Minimal dependencies for the cloud-only "lite" deployment.
+
+# Core model dependencies (still needed for processors and data handling)
+python-multipart
+transformers
+# torch, torchvision, and torchaudio are installed separately as CPU-only in the Dockerfile
+
+# Vision processing dependencies from my_vision_process.py
+Pillow
+requests
+packaging
+av
+opencv-python
+decord
+imageio
+numpy
+einops
+
+# Web UI and video pipeline dependencies
+fastapi
+uvicorn[standard]
+jinja2
+yt-dlp
+aiofiles
+uv
+
+# Gemini API Client
+google-generativeai
+
+# Vertex AI API Client
+google-cloud-aiplatform
+
+# --- Metadata Generation ---
+croissant
+
+# EXCLUDED: openai-whisper (local transcription)
+# EXCLUDED: peft, bitsandbytes, trl, datasets, accelerate (fine-tuning)
