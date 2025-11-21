@@ -20,6 +20,8 @@ import transcription
 from factuality_logic import parse_vtt
 from toon_parser import parse_veracity_toon
 
+import custom_clickbait_model
+
 # --- CroissantML Imports with error handling ---
 try:
     import mlcroissant as cnodes
