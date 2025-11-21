@@ -2,16 +2,15 @@ services:
   videochat_webui:
     build: .
     container_name: videochat_webui
-    # Use standard python command (mapped to /opt/conda/bin/python in this image)
-    command: python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8005:8000"
+      - "8006:8001"
     
-    # OPTIMIZATION: PyTorch DataLoaders crash without shared memory.
     shm_size: '8gb'
 
     volumes:
-      # Mount source code (Hot Reloading)
+      # Mount source code (Python Hot Reloading)
+      # Maps current directory to /app so src/ changes are reflected
       - .:/app
 
       # Persist Data

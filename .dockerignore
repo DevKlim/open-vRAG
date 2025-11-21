@@ -20,18 +20,20 @@ build/
 .git/
 .gitignore
 
-# Ignore downloaded videos and model cache from the build context
-# These will be handled by Docker volumes at runtime.
+# Ignore heavy data directories from context (mounted at runtime)
 videos/
 huggingface_cache/
 model/
 local_model/
-
-
-# Ignore heavy training data not needed for inference app
+lora_adapters/
 clickbaitDataAndTraining/
-*.csv
-!data/dataset.csv
+data/
 
-# Ignore notebooks from build context
+# Ignore notebooks
 *.ipynb
+
+# Ignore frontend dependencies (built inside Docker)
+frontend/node_modules/
+frontend/dist/
+
+hf_spaces/

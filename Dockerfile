@@ -1,23 +1,48 @@
-#due to training cutoff, this is the MODERN version as of 2025 Dec
+# ==========================================
+# Stage 1: Build Frontend (React/TS/Vite)
+# ==========================================
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend
+
+# Copy frontend definitions
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+
+# Copy source and build
+COPY frontend/ ./
+RUN npm run build
+
+# ==========================================
+# Stage 2: Build Backend (Golang)
+# ==========================================
+FROM golang:1.23 AS backend-builder
+WORKDIR /app/backend
+
+# Copy Go source
+COPY main.go .
+
+# Build static binary
+RUN go mod init vchat-server && \
+    go mod tidy && \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o vchat-server main.go
+
+# ==========================================
+# Stage 3: Final Runtime (PyTorch Base)
+# ==========================================
 FROM pytorch/pytorch:2.9.1-cuda13.0-cudnn9-devel
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     LITE_MODE=false \
-    PATH="/usr/lib/google-cloud-sdk/bin:$PATH"
+    PATH="/usr/lib/google-cloud-sdk/bin:$PATH" \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# 1. Install System Dependencies & Google Cloud SDK
-# Combined into a single layer for optimization
+# 1. Install System Dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
-    ninja-build \
-    build-essential \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
     curl \
     gnupg \
     ca-certificates \
@@ -26,19 +51,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Install uv for faster pip operations
+# 2. Install Python Dependencies
 RUN pip install uv
-
-# 3. Install Python Dependencies
-# Copy requirements first to leverage Docker cache
 COPY requirements.txt ./
 RUN uv pip install --system -r requirements.txt
 
-# 4. Copy Application Code
+# 3. Copy Python Application Code
 COPY . .
 
-# Expose the API port
+# 4. Install Built Artifacts
+COPY --from=backend-builder /app/backend/vchat-server /usr/local/bin/vchat-server
+RUN mkdir -p /usr/share/vchat/static
+COPY --from=frontend-builder /app/frontend/dist /usr/share/vchat/static
+
+# 5. Setup Entrypoint (Fix Windows Line Endings Here)
+COPY start.sh /usr/local/bin/start.sh
+RUN sed -i 's/\r$//' /usr/local/bin/start.sh && \
+    chmod +x /usr/local/bin/start.sh
+
+# Expose the Go Server port
 EXPOSE 8000
 
-# Run using standard python command
-CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the Orchestrator
+CMD ["/usr/local/bin/start.sh"]
