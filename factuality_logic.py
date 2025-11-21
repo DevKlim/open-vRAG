@@ -10,6 +10,15 @@ import inference_logic # Use direct import instead of relative
 logger = logging.getLogger(__name__)
 
 # --- Enhanced Prompts Requesting Structured JSON Output with Scores ---
+PROMPT_CLICKBAIT_ANALYSIS = (
+    "You are a media critic and clickbait detection expert. Analyze the video's content, visuals, and transcript for use of clickbait tactics. Provide your findings in a structured JSON format with three keys: 'analysis', 'score', and 'justification'.\n"
+    "- 'analysis' (string): A detailed report on clickbait elements. Check for sensational language in the caption/title, emotional exaggeration, use of curiosity gaps, visual/thumbnail misrepresentation (inferred from video content), and 'us vs. them' framing.\n"
+    "- 'score' (integer): A score from 1 to 10, where 1 means the content is blatant, high-leverage clickbait, and 10 means the content is purely descriptive and honest.\n"
+    "- 'justification' (string): A brief sentence explaining the score (e.g., 'Score is low due to all-caps title and use of emotionally charged, unsupported claims.').\n\n"
+    "**Caption for Context:**\n\n{caption}\n\n"
+    "**Transcript for Context:**\n\n{transcript}\n\n"
+    "Respond ONLY with the JSON object."
+)
 
 PROMPT_VISUAL_ARTIFACTS = (
     "You are a digital forensics expert. Analyze the video for visual manipulation. Provide your findings in a structured JSON format. The JSON object must contain three keys: 'analysis', 'score', and 'justification'.\n"

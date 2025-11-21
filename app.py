@@ -18,6 +18,8 @@ import factuality_logic
 import transcription
 from factuality_logic import parse_vtt
 
+import custom_clickbait_model
+
 # --- CroissantML Imports with error handling ---
 try:
     from croissant import nodes as cnodes
@@ -150,6 +152,16 @@ async def prepare_video_assets_async(url: str) -> dict:
             caption_text = info.get("description", info.get("title", "N/A"))
             clean_caption = caption_text.encode('ascii', 'ignore').decode('ascii').strip()
 
+            custom_clickbait_score = await loop.run_in_executor(
+                    None, 
+                    custom_clickbait_model.predict_clickbait_binary, 
+                    clean_caption
+                )
+            
+            progress_message = f"Custom clickbait prediction (1/0) complete: {custom_clickbait_score}\n"
+            logging.info(progress_message)
+
+
             metadata = {
                 "id": info.get("id", "N/A"),
                 "link": info.get("webpage_url", url), # Standardized key
@@ -158,6 +170,9 @@ async def prepare_video_assets_async(url: str) -> dict:
                 "shares": info.get("repost_count", 0),
                 "postdatetime": info.get("upload_date", "N/A"), # Standardized key (YYYYMMDD)
             }
+
+            metadata["custom_clickbait_binary"] = custom_clickbait_score
+
 
     progress_message = f"Cleaning video file: {original_path}\n"
     logging.info(f"Original video path: {original_path}")
@@ -453,6 +468,8 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             "videoaudiopairing": get_score(final_labels.get("video_audio_pairing", "")),
             "videocaptionpairing": get_score(final_labels.get("video_caption_pairing", "")),
             "audiocaptionpairing": get_score(final_labels.get("audio_caption_pairing", "")),
+
+            "custom_clickbait_binary": metadata.get("custom_clickbait_binary", -1),
             
             "disinfo_level": disinfo_analysis.get("disinformation_level", ""),
             "disinfo_intent": disinfo_analysis.get("disinformation_intent", ""),
