@@ -22,6 +22,9 @@ def parse_toon_line(line_def, data_line):
         except StopIteration:
             values = []
         
+        # CLEANUP: Strip parentheses if the model output numbers as (9) instead of 9
+        values = [v.strip().replace('(', '').replace(')', '') for v in values]
+
         headers = line_def.get('headers', [])
         
         # Ensure values match headers length if possible, or pad
@@ -57,8 +60,9 @@ def fuzzy_extract_scores(text: str) -> dict:
     ]
 
     for pattern_str, key in mappings:
-        # Look for pattern, optional text, then a number 1-10 or 100
-        pattern = re.compile(fr'(?i){pattern_str}.*?(\b10\b|[0-9])')
+        # Look for pattern, optional separators (: or - or space), then a number 1-10 or 100.
+        # Handles cases like: "Visual: 9", "Visual - 9", "Visual (9)"
+        pattern = re.compile(fr'(?i){pattern_str}\s*[:=\-\s\(]+\s*(\b10\b|[0-9])')
         match = pattern.search(text)
         if match:
             scores[key] = match.group(1)
@@ -83,8 +87,9 @@ def parse_veracity_toon(text: str) -> dict:
 
     # 2. Relaxed Regex for TOON Block Headers
     # Matches: key : type [ count ] { headers } :
+    # Made [count] optional to handle model hallucinations
     block_pattern = re.compile(
-        r'^\s*([a-zA-Z0-9_]+)\s*:\s*\w+\s*\[\s*(\d+)\s*\]\s*\{\s*(.*?)\s*\}\s*:\s*', 
+        r'^\s*([a-zA-Z0-9_]+)\s*:\s*(?:\w+\s*)?(?:\[\s*(\d+)\s*\])?\s*\{\s*(.*?)\s*\}\s*:\s*', 
         re.MULTILINE
     )
     
@@ -92,7 +97,8 @@ def parse_veracity_toon(text: str) -> dict:
     
     for i, match in enumerate(matches):
         key = match.group(1).lower()
-        count = int(match.group(2))
+        # Default to 1 if count is missing
+        count = int(match.group(2)) if match.group(2) else 1
         headers_str = match.group(3)
         headers = [h.strip().lower() for h in headers_str.split(',')]
         
@@ -181,9 +187,10 @@ def parse_veracity_toon(text: str) -> dict:
     # --- FUZZY FALLBACK ---
     if not got_vectors or not got_modalities:
         fuzzy_scores = fuzzy_extract_scores(text)
-        logger.warning("TOON Parsing incomplete. Applying Fuzzy Fallback.")
         
         if not got_vectors:
+            # Only warn if we genuinely had to use fuzzy because structural failed
+            logger.warning("Vectors missing in TOON. Applying Fuzzy Fallback.")
             flat_result['veracity_vectors']['visual_integrity_score'] = fuzzy_scores['visual']
             flat_result['veracity_vectors']['audio_integrity_score'] = fuzzy_scores['audio']
             flat_result['veracity_vectors']['source_credibility_score'] = fuzzy_scores['source']
@@ -191,6 +198,7 @@ def parse_veracity_toon(text: str) -> dict:
             flat_result['veracity_vectors']['emotional_manipulation_score'] = fuzzy_scores['emotion']
             
         if not got_modalities:
+            logger.warning("Modalities missing in TOON. Applying Fuzzy Fallback.")
             flat_result['modalities']['video_audio_score'] = fuzzy_scores['video_audio']
             flat_result['modalities']['video_caption_score'] = fuzzy_scores['video_caption']
             flat_result['modalities']['audio_caption_score'] = fuzzy_scores['audio_caption']

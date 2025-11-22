@@ -86,3 +86,4 @@ clickbaitDataAndTraining/
 *.csv
 !data/dataset.csv
 hf_spaces/
+metadata/

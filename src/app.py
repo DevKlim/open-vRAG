@@ -26,7 +26,6 @@ try:
     import mlcroissant as mlc
     CROISSANT_AVAILABLE = True
 except ImportError:
-    # Fallback for older versions or different package names if needed
     try:
         import croissant as mlc
         CROISSANT_AVAILABLE = True
@@ -38,10 +37,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 LITE_MODE = os.getenv("LITE_MODE", "false").lower() == "true"
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-os.makedirs("videos", exist_ok=True)
+STATIC_DIR = "static"
+if os.path.isdir("/usr/share/vchat/static"):
+    STATIC_DIR = "/usr/share/vchat/static"
+elif os.path.isdir("frontend/dist"):
+    STATIC_DIR = "frontend/dist"
+elif not os.path.isdir(STATIC_DIR):
+    os.makedirs(STATIC_DIR, exist_ok=True)
+    dummy_index = Path(STATIC_DIR) / "index.html"
+    if not dummy_index.exists():
+        dummy_index.write_text("<html><body>vChat Backend Running. Access via Port 8005 (Go Server).</body></html>")
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=STATIC_DIR)
+
+os.makedirs("data/videos", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 os.makedirs("data/labels", exist_ok=True)
 os.makedirs("metadata", exist_ok=True)
@@ -63,6 +74,8 @@ async def read_root(request: Request):
     custom_model_available = False
     if not LITE_MODE:
         custom_model_available = inference_logic.peft_model is not None
+    if not (Path(STATIC_DIR) / "index.html").exists():
+        return HTMLResponse(content="Frontend not found. Please build frontend or access via Go server.", status_code=404)
     return templates.TemplateResponse("index.html", {
         "request": request,
         "custom_model_available": custom_model_available,
@@ -130,16 +143,17 @@ async def prepare_video_assets_async(url: str) -> dict:
     else:
         tweet_id = extract_tweet_id(url)
         video_id = tweet_id if tweet_id else hashlib.md5(url.encode('utf-8')).hexdigest()[:16]
-        sanitized_check = Path(f"videos/{video_id}_fixed.mp4")
+        sanitized_check = Path(f"data/videos/{video_id}_fixed.mp4")
         
         ydl_opts = {
-            'format': 'best[ext=mp4]/best', 'outtmpl': 'videos/%(id)s.%(ext)s',
+            'format': 'best[ext=mp4]/best', 
+            'outtmpl': 'data/videos/%(id)s.%(ext)s',
             'progress_hooks': [progress_hook], 'quiet': True, 'noplaylist': True, 'no_overwrites': True,
             'writesubtitles': True, 'writeautomaticsub': True, 'subtitleslangs': ['en']
         }
         
         if sanitized_check.exists():
-            original_path = Path(f"videos/{video_id}.mp4")
+            original_path = Path(f"data/videos/{video_id}.mp4")
             metadata = {"id": video_id, "link": url, "caption": "Cached Video"}
         else:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -152,10 +166,10 @@ async def prepare_video_assets_async(url: str) -> dict:
                 }
                 video_id = info.get("id", video_id)
 
-        transcript_path = next(Path("videos").glob(f"{video_id}*.en.vtt"), None)
-        if not transcript_path: transcript_path = next(Path("videos").glob(f"{video_id}*.vtt"), None)
+        transcript_path = next(Path("data/videos").glob(f"{video_id}*.en.vtt"), None)
+        if not transcript_path: transcript_path = next(Path("data/videos").glob(f"{video_id}*.vtt"), None)
 
-    sanitized_path = Path(f"videos/{video_id}_fixed.mp4")
+    sanitized_path = Path(f"data/videos/{video_id}_fixed.mp4")
     if not sanitized_path.exists():
         await run_subprocess_async(["ffmpeg", "-i", str(original_path), "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-y", str(sanitized_path)])
 
@@ -170,64 +184,113 @@ async def prepare_video_assets_async(url: str) -> dict:
 
     return {"video": str(sanitized_path), "transcript": str(transcript_path) if transcript_path else None, "metadata": metadata}
 
+def safe_int(value):
+    """Helper to safely convert string scores that might contain non-numeric chars."""
+    try:
+        # Strip non-digits like parens or whitespace
+        clean = re.sub(r'[^\d]', '', str(value))
+        return int(clean) if clean else 0
+    except Exception:
+        return 0
+
 async def generate_and_save_croissant_metadata(row_data: dict) -> str:
     """
     Generates ML Croissant metadata for a labeled video record.
     """
-    if not CROISSANT_AVAILABLE: return "N/A"
     try:
-        # FIX: When providing `data` directly to RecordSet, do NOT use Source/Extract 
-        # that points to a file column. The dictionary keys in `data` imply the schema.
-        
-        fields = [
-            mlc.Field(name="id", description="Unique ID", data_types=mlc.DataType.TEXT),
-            mlc.Field(name="link", description="URL", data_types=mlc.DataType.URL),
-            mlc.Field(name="visual_integrity_score", description="Score (1-10)", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="audio_integrity_score", description="Score (1-10)", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="source_credibility_score", description="Score (1-10)", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="logical_consistency_score", description="Score (1-10)", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="emotional_manipulation_score", description="Score (1-10)", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="video_audio_score", description="Modality Match: Video-Audio", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="video_caption_score", description="Modality Match: Video-Caption", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="audio_caption_score", description="Modality Match: Audio-Caption", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="final_veracity_score", description="Final Factuality Score (1-100)", data_types=mlc.DataType.INTEGER),
-            mlc.Field(name="grounding_check", description="Evidence from search/RAG", data_types=mlc.DataType.TEXT),
-        ]
-        
-        # Prepare the single record data ensuring types are correct for validation
         sanitized_data = {
             "id": str(row_data.get("id", "")),
             "link": str(row_data.get("link", "")),
-            "visual_integrity_score": int(row_data.get("visual_integrity_score") or 0),
-            "audio_integrity_score": int(row_data.get("audio_integrity_score") or 0),
-            "source_credibility_score": int(row_data.get("source_credibility_score") or 0),
-            "logical_consistency_score": int(row_data.get("logical_consistency_score") or 0),
-            "emotional_manipulation_score": int(row_data.get("emotional_manipulation_score") or 0),
-            "video_audio_score": int(row_data.get("video_audio_score") or 0),
-            "video_caption_score": int(row_data.get("video_caption_score") or 0),
-            "audio_caption_score": int(row_data.get("audio_caption_score") or 0),
-            "final_veracity_score": int(row_data.get("final_veracity_score") or 0),
+            "visual_integrity_score": safe_int(row_data.get("visual_integrity_score")),
+            "audio_integrity_score": safe_int(row_data.get("audio_integrity_score")),
+            "source_credibility_score": safe_int(row_data.get("source_credibility_score")),
+            "logical_consistency_score": safe_int(row_data.get("logical_consistency_score")),
+            "emotional_manipulation_score": safe_int(row_data.get("emotional_manipulation_score")),
+            "video_audio_score": safe_int(row_data.get("video_audio_score")),
+            "video_caption_score": safe_int(row_data.get("video_caption_score")),
+            "audio_caption_score": safe_int(row_data.get("audio_caption_score")),
+            "final_veracity_score": safe_int(row_data.get("final_veracity_score")),
             "grounding_check": str(row_data.get("grounding_check", "")),
         }
-
-        # Define the RecordSet with inline data
-        record_set = mlc.RecordSet(
-            name="video_metadata_record", 
-            fields=fields, 
-            data=[sanitized_data]
-        )
-        
-        metadata = mlc.Metadata(
-            name=f"vchat-label-{sanitized_data['id']}", 
-            url=sanitized_data['link'], 
-            record_sets=[record_set]
-        )
-        
-        path = Path("metadata") / f"{sanitized_data['id']}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
-        path.write_text(json.dumps(metadata.to_json(), indent=2))
-        return str(path)
     except Exception as e:
-        logging.error(f"Croissant Generation Error: {e}", exc_info=True)
+        logging.error(f"Data Sanitization Error before Croissant generation: {e}")
+        return "N/A (Data Error)"
+
+    try:
+        video_id = sanitized_data["id"]
+        timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+
+        croissant_json = {
+          "@context": {
+            "@language": "en",
+            "@vocab": "https://schema.org/",
+            "column": "http://mlcommons.org/croissant/1.0/column",
+            "conformsTo": "http://dcterms.purl.org/conformsTo",
+            "cr": "http://mlcommons.org/croissant/1.0/",
+            "data": { "@id": "http://mlcommons.org/croissant/1.0/data", "@type": "@json" },
+            "dataType": { "@id": "http://mlcommons.org/croissant/1.0/dataType", "@type": "@vocab" },
+            "extract": "http://mlcommons.org/croissant/1.0/extract",
+            "field": "http://mlcommons.org/croissant/1.0/field",
+            "fileProperty": "http://mlcommons.org/croissant/1.0/fileProperty",
+            "fileObject": "http://mlcommons.org/croissant/1.0/fileObject",
+            "fileSet": "http://mlcommons.org/croissant/1.0/fileSet",
+            "format": "http://mlcommons.org/croissant/1.0/format",
+            "includes": "http://mlcommons.org/croissant/1.0/includes",
+            "isEnumeration": "http://mlcommons.org/croissant/1.0/isEnumeration",
+            "jsonPath": "http://mlcommons.org/croissant/1.0/jsonPath",
+            "key": "http://mlcommons.org/croissant/1.0/key",
+            "md5": "http://mlcommons.org/croissant/1.0/md5",
+            "parentField": "http://mlcommons.org/croissant/1.0/parentField",
+            "path": "http://mlcommons.org/croissant/1.0/path",
+            "recordSet": "http://mlcommons.org/croissant/1.0/recordSet",
+            "references": "http://mlcommons.org/croissant/1.0/references",
+            "regex": "http://mlcommons.org/croissant/1.0/regex",
+            "repeated": "http://mlcommons.org/croissant/1.0/repeated",
+            "replace": "http://mlcommons.org/croissant/1.0/replace",
+            "sc": "https://schema.org/",
+            "separator": "http://mlcommons.org/croissant/1.0/separator",
+            "source": "http://mlcommons.org/croissant/1.0/source",
+            "subField": "http://mlcommons.org/croissant/1.0/subField",
+            "transform": "http://mlcommons.org/croissant/1.0/transform"
+          },
+          "@type": "sc:Dataset",
+          "name": f"vchat-label-{video_id}",
+          "conformsTo": "http://mlcommons.org/croissant/1.0",
+          "description": f"Veracity analysis labels for video {video_id}",
+          "url": sanitized_data["link"],
+          "recordSet": [
+            {
+              "@type": "cr:RecordSet",
+              "name": "video_metadata_record",
+              "description": "Factuality and veracity scores generated by VideoChat model.",
+              "data": [ sanitized_data ],
+              "field": [
+                {"@type": "cr:Field", "name": "id", "dataType": "sc:Text", "source": {"extract": {"column": "id"}}},
+                {"@type": "cr:Field", "name": "link", "dataType": "sc:URL", "source": {"extract": {"column": "link"}}},
+                {"@type": "cr:Field", "name": "visual_integrity_score", "dataType": "sc:Integer", "source": {"extract": {"column": "visual_integrity_score"}}},
+                {"@type": "cr:Field", "name": "audio_integrity_score", "dataType": "sc:Integer", "source": {"extract": {"column": "audio_integrity_score"}}},
+                {"@type": "cr:Field", "name": "source_credibility_score", "dataType": "sc:Integer", "source": {"extract": {"column": "source_credibility_score"}}},
+                {"@type": "cr:Field", "name": "logical_consistency_score", "dataType": "sc:Integer", "source": {"extract": {"column": "logical_consistency_score"}}},
+                {"@type": "cr:Field", "name": "emotional_manipulation_score", "dataType": "sc:Integer", "source": {"extract": {"column": "emotional_manipulation_score"}}},
+                {"@type": "cr:Field", "name": "video_audio_score", "dataType": "sc:Integer", "source": {"extract": {"column": "video_audio_score"}}},
+                {"@type": "cr:Field", "name": "video_caption_score", "dataType": "sc:Integer", "source": {"extract": {"column": "video_caption_score"}}},
+                {"@type": "cr:Field", "name": "audio_caption_score", "dataType": "sc:Integer", "source": {"extract": {"column": "audio_caption_score"}}},
+                {"@type": "cr:Field", "name": "final_veracity_score", "dataType": "sc:Integer", "source": {"extract": {"column": "final_veracity_score"}}},
+                {"@type": "cr:Field", "name": "grounding_check", "dataType": "sc:Text", "source": {"extract": {"column": "grounding_check"}}}
+              ]
+            }
+          ]
+        }
+
+        path = Path("metadata") / f"{video_id}_{timestamp}.json"
+        path.write_text(json.dumps(croissant_json, indent=2))
+        return str(path)
+        
+    except Exception as e:
+        logging.error("================ CROISSANT GENERATION ERROR ================")
+        logging.error(f"Failed Data Payload: {json.dumps(sanitized_data, indent=2)}")
+        logging.error(f"Exception: {e}", exc_info=True)
+        logging.error("============================================================")
         return "N/A (Error)"
 
 async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
@@ -250,11 +313,11 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             if isinstance(msg, dict) and "parsed_data" in msg:
                 final_labels = msg["parsed_data"]
                 raw_toon = msg.get("raw_toon", "")
+                logging.info(f"--- Raw AI Response ({model_selection}) ---\n{raw_toon}\n---------------------------------------")
             elif isinstance(msg, str): yield msg
 
         if not final_labels: raise RuntimeError("No labels generated.")
         
-        # Extract Data with defaults to avoid KeyErrors
         vec = final_labels.get("veracity_vectors", {})
         mod = final_labels.get("modalities", {})
         fac = final_labels.get("factuality_factors", {})
@@ -270,14 +333,12 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             "videotranscriptionpath": paths["transcript"] or "",
             "video_context_summary": final_labels.get("video_context_summary", ""),
             
-            # Vectors
             "visual_integrity_score": vec.get("visual_integrity_score", "0"),
             "audio_integrity_score": vec.get("audio_integrity_score", "0"),
             "source_credibility_score": vec.get("source_credibility_score", "0"),
             "logical_consistency_score": vec.get("logical_consistency_score", "0"),
             "emotional_manipulation_score": vec.get("emotional_manipulation_score", "0"),
             
-            # New Modalities
             "video_audio_score": mod.get("video_audio_score", "0"),
             "video_caption_score": mod.get("video_caption_score", "0"),
             "audio_caption_score": mod.get("audio_caption_score", "0"),
@@ -312,14 +373,11 @@ async def process_labeling_stream(video_url: str, gemini_config: dict, vertex_co
         vid_id = row["id"]
         ts = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
         
-        # Save Files
         with open(f"data/labels/{vid_id}_{ts}_labels.json", 'w') as f: json.dump(final_data["full_json"], f, indent=2)
         with open(f"data/labels/{vid_id}_{ts}.toon", 'w') as f: f.write(final_data["raw_toon"])
         
-        # Metadata
         row["metadatapath"] = await generate_and_save_croissant_metadata(row)
         
-        # CSV Append logic
         dpath = Path("data/dataset.csv")
         exists = dpath.exists()
         fieldnames = list(row.keys())
