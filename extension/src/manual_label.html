@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vChat Manual Labeling</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="vchat-popup" style="width: 100%; height: 100vh; box-sizing: border-box; overflow-y: auto;">
+    
+    <div style="border-bottom: 1px solid #334155; padding-bottom: 10px; margin-bottom: 20px;">
+        <h2 style="margin: 0; color: #10b981;">Manual Labeling</h2>
+        <div class="form-group" style="margin-top: 10px;">
+            <label class="form-label">Video Link</label>
+            <input type="text" id="input-link" class="form-input" readonly>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Caption</label>
+            <textarea id="input-caption" class="form-input" rows="3"></textarea>
+        </div>
+    </div>
+
+    <form id="label-form">
+        <!-- Veracity Vectors -->
+        <h3 style="font-size: 14px; color: #94a3b8; text-transform: uppercase;">Veracity Vectors (1-10)</h3>
+        
+        <div class="form-group">
+            <label class="form-label">Visual Integrity</label>
+            <div class="range-container">
+                <input type="range" id="score-visual" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-visual" class="range-val">5</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Audio Integrity</label>
+            <div class="range-container">
+                <input type="range" id="score-audio" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-audio" class="range-val">5</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Source Credibility</label>
+            <div class="range-container">
+                <input type="range" id="score-source" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-source" class="range-val">5</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Logical Consistency</label>
+            <div class="range-container">
+                <input type="range" id="score-logic" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-logic" class="range-val">5</span>
+            </div>
+        </div>
+        
+        <hr style="border-color: #334155; opacity: 0.3;">
+
+        <!-- Modality Alignment -->
+        <h3 style="font-size: 14px; color: #94a3b8; text-transform: uppercase;">Modality Alignment (1-10)</h3>
+
+        <div class="form-group">
+            <label class="form-label">Video-Audio Match</label>
+            <div class="range-container">
+                <input type="range" id="score-va" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-va" class="range-val">5</span>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label class="form-label">Video-Caption Match</label>
+            <div class="range-container">
+                <input type="range" id="score-vc" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-vc" class="range-val">5</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Audio-Caption Match</label>
+            <div class="range-container">
+                <input type="range" id="score-ac" min="1" max="10" value="5" class="form-input" style="padding:0">
+                <span id="val-ac" class="range-val">5</span>
+            </div>
+        </div>
+
+        <hr style="border-color: #334155; opacity: 0.3;">
+
+        <!-- Final Assessment -->
+        <div class="form-group">
+            <label class="form-label">Final Veracity Score (1-100)</label>
+            <div class="range-container">
+                <input type="range" id="score-final" min="1" max="100" value="50" class="form-input" style="padding:0">
+                <span id="val-final" class="range-val">50</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Reasoning / Notes</label>
+            <textarea id="input-reasoning" class="form-input" rows="4" placeholder="Why did you give these scores?"></textarea>
+        </div>
+
+        <button type="submit" class="btn-submit">Save Label</button>
+    </form>
+
+    <script src="manual_label.js"></script>
+</body>
+</html>

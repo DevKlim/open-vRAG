@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "vChat Ingestion Tool",
+  "version": "1.0",
+  "description": "Ingest and label social media videos for vChat.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "http://localhost:8005/*",
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
+    "*://*.reddit.com/*"
+  ],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "background": {
+    "scripts": ["src/background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.twitter.com/*", "*://*.x.com/*", "*://*.reddit.com/*"],
+      "js": ["src/content.js"],
+      "css": ["src/styles.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/manual_label.html", "src/manual_label.js", "src/styles.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

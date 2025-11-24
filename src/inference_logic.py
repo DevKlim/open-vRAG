@@ -199,7 +199,6 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
         
         raw_text = response.text
         
-        # Safety check for empty response
         if not raw_text:
              yield "Model returned empty response (possibly triggered safety filter)."
              yield {"error": "Empty Response"}
@@ -207,14 +206,14 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
 
         parsed_data = parse_veracity_toon(raw_text)
         
-        # Check quality: if visual score is 0, likely parsing failed or model refused to score.
         is_zero = parsed_data['veracity_vectors']['visual_integrity_score'] == '0'
         if is_zero:
              yield "Parsing incomplete (score 0). Initiating Auto-Repair..."
              raw_text = await attempt_toon_repair(raw_text, toon_schema, None, 'gemini', gemini_config)
              parsed_data = parse_veracity_toon(raw_text)
 
-        yield {"raw_toon": raw_text, "parsed_data": parsed_data}
+        # Added prompt_used to return dict
+        yield {"raw_toon": raw_text, "parsed_data": parsed_data, "prompt_used": prompt_text}
         await loop.run_in_executor(None, lambda: genai_legacy.delete_file(name=uploaded_file.name))
 
     except Exception as e:
@@ -268,7 +267,6 @@ async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript
         
         raw_text = response.text
         
-        # Safety check
         if not raw_text:
              yield "Model returned empty response."
              yield {"error": "Empty Response"}
@@ -276,14 +274,14 @@ async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript
 
         parsed_data = parse_veracity_toon(raw_text)
         
-        # Check quality
         is_zero = parsed_data['veracity_vectors']['visual_integrity_score'] == '0'
         if is_zero:
             yield "Parsing incomplete (score 0). Initiating Auto-Repair..."
             raw_text = await attempt_toon_repair(raw_text, toon_schema, client, 'vertex', vertex_config)
             parsed_data = parse_veracity_toon(raw_text)
 
-        yield {"raw_toon": raw_text, "parsed_data": parsed_data}
+        # Added prompt_used to return dict
+        yield {"raw_toon": raw_text, "parsed_data": parsed_data, "prompt_used": prompt_text}
             
     except Exception as e:
         yield f"ERROR: {e}"

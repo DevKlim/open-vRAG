@@ -26,12 +26,16 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Check if request is for the API
-		if strings.HasPrefix(r.URL.Path, "/process") || 
-		   strings.HasPrefix(r.URL.Path, "/label_video") || 
-		   strings.HasPrefix(r.URL.Path, "/batch_label") || 
-		   strings.HasPrefix(r.URL.Path, "/model-architecture") ||
-		   strings.HasPrefix(r.URL.Path, "/download-dataset") {
-			
+		// Added /queue to the list so uploads and list fetches work
+		if strings.HasPrefix(r.URL.Path, "/process") ||
+			strings.HasPrefix(r.URL.Path, "/label_video") ||
+			strings.HasPrefix(r.URL.Path, "/batch_label") ||
+			strings.HasPrefix(r.URL.Path, "/model-architecture") ||
+			strings.HasPrefix(r.URL.Path, "/download-dataset") ||
+			strings.HasPrefix(r.URL.Path, "/extension") ||
+			strings.HasPrefix(r.URL.Path, "/manage") ||
+			strings.HasPrefix(r.URL.Path, "/queue") {
+
 			log.Printf("Proxying %s to Python Backend...", r.URL.Path)
 			proxy.ServeHTTP(w, r)
 			return
@@ -40,7 +44,7 @@ func main() {
 		// Check if file exists in static dir, otherwise serve index.html (SPA Routing)
 		path := staticPath + r.URL.Path
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			http.ServeFile(w, r, staticPath + "/index.html")
+			http.ServeFile(w, r, staticPath+"/index.html")
 			return
 		}
 

@@ -31,14 +31,14 @@ def generate_structure(root_dir, ignore_dirs, ignore_files, ignore_extensions):
 
 if __name__ == "__main__":
     # Adjusted path to point to the root from inside preprocessing_tools/
-    target_dir = '../' 
+    target_dir = '../vChat' 
     
     # Define what to ignore
     dirs_to_ignore = {'.git', '__pycache__', 'node_modules', 'dist', 'build', '.venv', 'venv'}
     
     files_to_ignore = {'.DS_Store', 'package-lock.json', 'yarn.lock'}
     
-    extensions_to_ignore = {'.pyc'}
+    extensions_to_ignore = {'.pyc', '.jpg', '.png', '.mp4', '.toon', '.vtt', '.json', '.wav', '.pk1'}
 
     # Generate the structure
     try:
