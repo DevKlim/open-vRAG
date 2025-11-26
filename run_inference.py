@@ -10,14 +10,14 @@ from my_vision_process import process_vision_info, client
 # --- Prompt Definitions ---
 QA_THINK_GLUE = """Answer the question: "[QUESTION]" according to the content of the video. 
 
-Output your think process within the <think> </think> tags.
+Output your think process within the <think> </think> tags. Use a Chain of Thought to reason step-by-step. Analyze the video content, identify key evidence, and logically deduce the answer.
 
 Then, provide your answer within the <answer> </answer> tags. At the same time, in the <glue> </glue> tags, present the precise time period in seconds of the video clips on which you base your answer in the format of [(s1, e1), (s2, e2), ...]. For example: <think>...</think><answer>A</answer><glue>[(5.2, 10.4)]</glue>.
 """
 
 QA_THINK = """Answer the question: "[QUESTION]" according to the content of the video.
 
-Output your think process within the <think> </think> tags.
+Output your think process within the <think> </think> tags. Use a Chain of Thought to reason step-by-step. Analyze the video content, identify key evidence, and logically deduce the answer.
 
 Then, provide your answer within the <answer> </answer> tags. For example: <think>...</think><answer>A</answer>.
 """

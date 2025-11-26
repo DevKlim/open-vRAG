@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 PROMPT_VISUAL_ARTIFACTS = (
     "Analyze the video for visual manipulation (Deepfakes, editing anomalies).\n"
-    "Steps inside <thinking>: 1. Scan for artifacts. 2. Check cuts.\n"
+    "Steps inside <thinking>: Reason step-by-step. 1. Observe visual details and lighting. 2. Analyze movements and transitions. 3. Formulate a conclusion on integrity.\n"
     "Output TOON format:\n"
     "visual_analysis: result[2]{score,justification}:\n"
     "Score(1-10),\"Justification text\""
@@ -23,7 +23,7 @@ PROMPT_VISUAL_ARTIFACTS = (
 
 PROMPT_CONTENT_ANALYSIS = (
     "Analyze the content for accuracy and logic.\n"
-    "Steps inside <thinking>: 1. Identify claims. 2. Check fallacies. 3. Assess emotion.\n"
+    "Steps inside <thinking>: Reason step-by-step. 1. Identify main claims and narrative. 2. Check for logical fallacies or emotional manipulation. 3. Verify facts against general knowledge.\n"
     "**Transcript:**\n{transcript}\n"
     "Output TOON format:\n"
     "content_analysis: result[2]{score,justification}:\n"
@@ -32,7 +32,7 @@ PROMPT_CONTENT_ANALYSIS = (
 
 PROMPT_AUDIO_ANALYSIS = (
     "Analyze audio for synthesis or manipulation.\n"
-    "Steps inside <thinking>: 1. Listen for robotic inflections. 2. Check lip-sync.\n"
+    "Steps inside <thinking>: Reason step-by-step. 1. Listen to tone and background noise. 2. Analyze speech patterns and lip-sync. 3. Detect any robotic artifacts or glitches.\n"
     "**Transcript:**\n{transcript}\n"
     "Output TOON format:\n"
     "audio_analysis: result[2]{score,justification}:\n"
