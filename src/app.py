@@ -22,6 +22,15 @@ import transcription
 from factuality_logic import parse_vtt
 from toon_parser import parse_veracity_toon
 
+# --- Fix for Large CSV Fields ---
+# Your dataset.csv contains large text blocks in some columns.
+# We increase the limit to prevent "_csv.Error: field larger than field limit".
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    # Fallback for platforms where sys.maxsize is too large for C long
+    csv.field_size_limit(2147483647)
+
 try:
     import mlcroissant as mlc
     CROISSANT_AVAILABLE = True
@@ -64,7 +73,7 @@ os.makedirs("data/videos", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 os.makedirs("data/labels", exist_ok=True)
 os.makedirs("data/prompts", exist_ok=True) 
-os.makedirs("data/responses", exist_ok=True) # Ensure raw responses folder exists
+os.makedirs("data/responses", exist_ok=True)
 os.makedirs("metadata", exist_ok=True)
 
 STOP_QUEUE_SIGNAL = False
@@ -127,41 +136,40 @@ def extract_tweet_id(url: str) -> str | None:
     if match: return match.group(1)
     return None
 
+def normalize_link(link: str) -> str:
+    """Standardize links for comparison."""
+    if not link: return ""
+    return link.split('?')[0].strip().rstrip('/')
+
 def check_if_processed(link: str) -> bool:
     target_id = extract_tweet_id(link)
-    # Normalize link: remove query params, strip slash
-    link_clean = link.split('?')[0].strip().rstrip('/')
+    link_clean = normalize_link(link)
     
     for filename in ["data/dataset.csv", "data/manual_dataset.csv"]:
         path = Path(filename)
         if not path.exists(): continue
         try:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                # Basic check using CSV sniffer to avoid crashes on bad files
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
                 sample = f.read(2048)
                 f.seek(0)
                 has_header = False
                 try:
                     has_header = csv.Sniffer().has_header(sample)
                 except:
-                    has_header = True # Default to assume header if sniff fails on small files
+                    has_header = True
 
                 if has_header:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        # Compare Links
-                        row_link = row.get('link', '').split('?')[0].strip().rstrip('/')
+                        row_link = normalize_link(row.get('link', ''))
                         if row_link == link_clean: return True
                         
-                        # Compare IDs (if Twitter/X)
                         row_id = row.get('id', '')
                         if target_id and row_id == target_id: return True
                 else:
-                    # Fallback for headerless
                     reader = csv.reader(f)
                     for row in reader:
                         if not row: continue
-                        # Fallback raw search
                         if link_clean in row: return True
                         if target_id and target_id in row: return True
         except Exception:
@@ -289,6 +297,7 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
         vec = final_labels.get("veracity_vectors", {})
         mod = final_labels.get("modalities", {})
         fin = final_labels.get("final_assessment", {})
+        tags = final_labels.get("tags", [])
         
         row = {
             "id": paths["metadata"]["id"],
@@ -306,7 +315,8 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
             "video_caption_score": mod.get("video_caption_score", "0"),
             "audio_caption_score": mod.get("audio_caption_score", "0"),
             "final_veracity_score": fin.get("veracity_score_total", "0"),
-            "final_reasoning": fin.get("reasoning", "")
+            "final_reasoning": fin.get("reasoning", ""),
+            "tags": ", ".join(tags)
         }
         yield {"csv_row": row, "full_json": final_labels, "raw_toon": raw_toon}
 
@@ -318,7 +328,7 @@ async def get_queue_list():
     queue_path = Path("data/batch_queue.csv")
     if not queue_path.exists(): return []
     items = []
-    with open(queue_path, 'r', encoding='utf-8') as f:
+    with open(queue_path, 'r', encoding='utf-8', errors='replace') as f:
         reader = csv.reader(f)
         try: next(reader)
         except: pass
@@ -343,7 +353,7 @@ async def delete_queue_item(link: str):
     deleted = False
     try:
         # Read everything first
-        with open(queue_path, 'r', encoding='utf-8') as f:
+        with open(queue_path, 'r', encoding='utf-8', errors='replace') as f:
             reader = csv.reader(f)
             rows = list(reader)
         
@@ -404,7 +414,7 @@ async def upload_csv_to_queue(file: UploadFile = File(...)):
         queue_path = Path("data/batch_queue.csv")
         existing_links = set()
         if queue_path.exists():
-            with open(queue_path, 'r', encoding='utf-8') as f:
+            with open(queue_path, 'r', encoding='utf-8', errors='replace') as f:
                 existing_links = set(f.read().splitlines())
 
         added_count = 0
@@ -448,7 +458,7 @@ async def run_queue_processing(
             return
         
         items = []
-        with open(queue_path, 'r', encoding='utf-8') as f:
+        with open(queue_path, 'r', encoding='utf-8', errors='replace') as f:
             reader = csv.reader(f)
             try: next(reader) 
             except: pass
@@ -528,7 +538,7 @@ async def extension_ingest(request: Request):
         file_exists = queue_path.exists()
         
         if file_exists:
-            with open(queue_path, 'r', encoding='utf-8') as f:
+            with open(queue_path, 'r', encoding='utf-8', errors='replace') as f:
                 if link in f.read(): 
                     return {"status": "queued", "msg": "Duplicate"}
                     
@@ -585,12 +595,13 @@ async def extension_save_manual(request: Request):
         link = data.get("link")
         labels = data.get("labels", {})
         stats = data.get("stats", {})
+        tags = data.get("tags", "") # Accept tags string
         
         if not link: raise HTTPException(status_code=400, detail="No link")
         
         video_id = extract_tweet_id(link) or hashlib.md5(link.encode()).hexdigest()[:16]
         
-        # Build row data including new stats
+        # 1. Build row data for Manual Dataset
         row_data = {
             "id": video_id,
             "link": link,
@@ -613,33 +624,178 @@ async def extension_save_manual(request: Request):
             "final_veracity_score": labels.get("final_veracity_score", 0),
             "final_reasoning": labels.get("reasoning", ""),
             
-            # New Stats
+            # New Stats & Tags
             "stats_likes": stats.get("likes", 0),
             "stats_shares": stats.get("shares", 0),
             "stats_comments": stats.get("comments", 0),
-            "stats_platform": stats.get("platform", "unknown")
+            "stats_platform": stats.get("platform", "unknown"),
+            "tags": tags
         }
         
+        # Save to manual_dataset.csv
         dpath = Path("data/manual_dataset.csv")
         exists = dpath.exists()
-        
-        fieldnames = list(row_data.keys())
-        
         with open(dpath, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+            writer = csv.DictWriter(f, fieldnames=list(row_data.keys()), extrasaction='ignore')
             if not exists: writer.writeheader()
             writer.writerow(row_data)
+
+        # 2. PERFORM COMPARISON AGAINST AI DATA
+        ai_path = Path("data/dataset.csv")
+        ai_data = None
+        if ai_path.exists():
+            with open(ai_path, 'r', encoding='utf-8', errors='replace') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Find by link or ID (Normalize first)
+                    r_link = normalize_link(row.get('link', ''))
+                    t_link = normalize_link(link)
+                    
+                    if r_link == t_link or row.get('id') == video_id:
+                        ai_data = row
+                        break
+        
+        if ai_data:
+            # Calculate Differences (AI - Manual)
+            comp_path = Path("data/comparison.csv")
+            comp_exists = comp_path.exists()
             
-        return {"status": "saved"}
+            # Helper to extract int safely
+            def get_int(d, k): 
+                try: 
+                    # sanitize weird strings like "(9)"
+                    val = str(d.get(k, 0))
+                    val = re.sub(r'[^\d]', '', val)
+                    return int(val) if val else 0
+                except: return 0
+
+            comparison_row = {
+                "id": video_id,
+                "link": link,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                
+                # Visual
+                "ai_visual": get_int(ai_data, "visual_integrity_score"),
+                "manual_visual": row_data["visual_integrity_score"],
+                "delta_visual": get_int(ai_data, "visual_integrity_score") - row_data["visual_integrity_score"],
+
+                # Audio
+                "ai_audio": get_int(ai_data, "audio_integrity_score"),
+                "manual_audio": row_data["audio_integrity_score"],
+                "delta_audio": get_int(ai_data, "audio_integrity_score") - row_data["audio_integrity_score"],
+                
+                # Source
+                "ai_source": get_int(ai_data, "source_credibility_score"),
+                "manual_source": row_data["source_credibility_score"],
+                "delta_source": get_int(ai_data, "source_credibility_score") - row_data["source_credibility_score"],
+
+                # Logic
+                "ai_logic": get_int(ai_data, "logical_consistency_score"),
+                "manual_logic": row_data["logical_consistency_score"],
+                "delta_logic": get_int(ai_data, "logical_consistency_score") - row_data["logical_consistency_score"],
+
+                # Final
+                "ai_final": get_int(ai_data, "final_veracity_score"),
+                "manual_final": row_data["final_veracity_score"],
+                "delta_final": get_int(ai_data, "final_veracity_score") - row_data["final_veracity_score"]
+            }
+
+            with open(comp_path, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=list(comparison_row.keys()), extrasaction='ignore')
+                if not comp_exists: writer.writeheader()
+                writer.writerow(comparison_row)
+            
+        return {"status": "saved", "compared": True if ai_data else False}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/workflow/status")
+async def get_workflow_status():
+    """
+    Returns a list of all known links (from queue and AI dataset),
+    indicating whether they have been Manually Labeled.
+    """
+    all_links = {}
+
+    # 1. Load Queue (Raw)
+    qp = Path("data/batch_queue.csv")
+    if qp.exists():
+        with open(qp, 'r', encoding='utf-8', errors='replace') as f:
+            reader = csv.reader(f)
+            try: next(reader)
+            except: pass
+            for r in reader:
+                if r:
+                    url = r[0].strip()
+                    if url:
+                        # Use normalized key for matching, but keep original for display
+                        norm_key = normalize_link(url)
+                        all_links[norm_key] = {
+                            "link": url, "source": "queue", 
+                            "ai_status": "Pending", "manual_status": "Pending",
+                            "ai_data": None
+                        }
+
+    # 2. Load AI Labels
+    # We loop through dataset.csv. If a link isn't in manual_dataset.csv, it will stay "Pending" (Needs Manual)
+    dp = Path("data/dataset.csv")
+    if dp.exists():
+        with open(dp, 'r', encoding='utf-8', errors='replace') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                url = row.get("link", "").strip()
+                if url:
+                    norm_key = normalize_link(url)
+                    if norm_key not in all_links:
+                        all_links[norm_key] = {"link": url, "source": "dataset", "manual_status": "Pending"}
+                    
+                    all_links[norm_key]["ai_status"] = "Labeled"
+                    all_links[norm_key]["ai_data"] = {
+                        "visual": row.get("visual_integrity_score"),
+                        "final": row.get("final_veracity_score"),
+                        "reasoning": row.get("final_reasoning"),
+                        "tags": row.get("tags", "")
+                    }
+
+    # 3. Load Manual Labels
+    mp = Path("data/manual_dataset.csv")
+    if mp.exists():
+        with open(mp, 'r', encoding='utf-8', errors='replace') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                url = row.get("link", "").strip()
+                if url:
+                    norm_key = normalize_link(url)
+                    if norm_key in all_links:
+                        all_links[norm_key]["manual_status"] = "Completed"
+                        all_links[norm_key]["manual_tags"] = row.get("tags", "")
+                    else:
+                        # In case manual label exists without queue/AI entry (e.g. extension)
+                        all_links[norm_key] = {
+                            "link": url, "source": "manual_only", 
+                            "ai_status": "Unknown", "manual_status": "Completed",
+                            "manual_tags": row.get("tags", "")
+                        }
+
+    return list(all_links.values())
 
 @app.get("/manage/list")
 async def list_data():
     data = []
+
+    # 1. Build Index of Manual Labels to check "Need Manual" status
+    manual_index = set()
+    mp = Path("data/manual_dataset.csv")
+    if mp.exists():
+        with open(mp, 'r', encoding='utf-8', errors='replace') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get('link'): manual_index.add(normalize_link(row['link']))
+                if row.get('id'): manual_index.add(row['id'].strip())
+
     def read_csv(path, source_type):
         if not path.exists(): return
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if not row.get('id') or row['id'].strip() == "":
@@ -655,6 +811,16 @@ async def list_data():
                 
                 row['source_type'] = source_type
                 row['json_data'] = json_content
+                
+                # NEW: Verification Status for AI rows
+                if source_type == "auto":
+                    lid = row.get('id')
+                    llink = normalize_link(row.get('link', ''))
+                    if lid in manual_index or llink in manual_index:
+                        row['manual_verification_status'] = "Verified"
+                    else:
+                        row['manual_verification_status'] = "Need Manual"
+                
                 data.append(row)
 
     read_csv(Path("data/dataset.csv"), "auto")
@@ -673,13 +839,13 @@ async def delete_data(id: str = "", link: str = ""):
         if not path.exists(): return
         rows = []
         found_in_file = False
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             reader = csv.DictReader(f)
             fieldnames = reader.fieldnames
             for row in reader:
                 is_match = False
                 if id and row.get('id') == id: is_match = True
-                elif link and row.get('link') == link: is_match = True
+                elif link and normalize_link(row.get('link', '')) == normalize_link(link): is_match = True
                 if is_match:
                     found_in_file = True
                     deleted_count += 1

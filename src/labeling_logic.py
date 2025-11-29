@@ -1,4 +1,3 @@
-# labeling_logic.py
 # Utilizes TOON (Token-Oriented Object Notation) for token efficiency and structured output.
 
 LABELING_PROMPT_TEMPLATE = """
@@ -17,6 +16,7 @@ Your goal is to mass-label video content, quantifying "Veracity Vectors" and "Mo
     *   Analyze *Audio Integrity* (Voice cloning, sync).
     *   Analyze *Modality Alignment* (Does video match audio? Does caption match content? Does audio match caption?).
     *   Analyze *Logic* (Fallacies, gaps).
+    *   **Classify Tags:** Identify 3-5 relevant tags (e.g., "political", "celebrity", "targeting", "satire", "news").
     *   Determine *Disinformation* classification.
 3.  **Output Format:** Output strictly in **TOON** format (Token-Oriented Object Notation) as defined below.
 
@@ -52,6 +52,9 @@ SCORE_INSTRUCTIONS_SIMPLE = """
 SCHEMA_SIMPLE = """summary: text[1]{text}:
 "Brief neutral summary of the video events"
 
+tags: list[1]{keywords}:
+"political, celebrity, deepfake, viral"
+
 vectors: scores[1]{visual,audio,source,logic,emotion}:
 (Int 1-10),(Int 1-10),(Int 1-10),(Int 1-10),(Int 1-10)
 *Scale: 1=Fake/Malicious, 10=Authentic/Neutral*
@@ -73,6 +76,9 @@ final: assessment[1]{score,reasoning}:
 SCHEMA_REASONING = """
 summary: text[1]{text}:
 "Brief neutral summary of the video events"
+
+tags: list[1]{keywords}:
+"political, celebrity, deepfake, viral"
 
 vectors: details[5]{category,score,reasoning}:
 Visual,(Int 1-10),"Reasoning for visual score"
@@ -140,6 +146,7 @@ FCOT_SYNTHESIS_PROMPT = """
 **Action**: Integrate your Macro Hypothesis and Micro-Observations.
 - **Consensus Check**: If Micro-Observations contradict the Macro Hypothesis, prioritize the Micro evidence (Self-Correction).
 - **Compression**: Synthesize the findings into the final structured format.
+- **Tags**: Assign 3-5 high-level tags (e.g., "political", "fabricated", "humor").
 
 **Output Format**:
 Strictly fill out the following TOON schema based on the consensus. Do not include markdown code blocks.

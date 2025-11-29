@@ -85,5 +85,5 @@ Thumbs.db
 clickbaitDataAndTraining/
 *.csv
 !data/dataset.csv
-hf_spaces/
+# hf_spaces/
 metadata/

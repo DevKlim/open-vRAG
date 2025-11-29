@@ -1,4 +1,3 @@
-# toon_parser.py
 import re
 import logging
 import csv
@@ -60,11 +59,10 @@ def fuzzy_extract_scores(text: str) -> dict:
     }
     
     # Mappings: Regex Pattern -> Score Key
-    # Added 'accuracy' mapping to 'visual' as a last resort if model conflates sections
     mappings = [
         ('visual', 'visual'),
         ('visual.*?integrity', 'visual'),
-        ('accuracy', 'visual'), # Fallback: sometimes model puts accuracy in list
+        ('accuracy', 'visual'), # Fallback
         ('audio', 'audio'),
         ('source', 'source'),
         ('logic', 'logic'),
@@ -75,18 +73,9 @@ def fuzzy_extract_scores(text: str) -> dict:
     ]
 
     for pattern_str, key in mappings:
-        # Regex explanation:
-        # (?i) : Case insensitive
-        # {pattern_str} : The keyword
-        # .*? : Non-greedy match for anything between key and score (allow "Score:", "(High)", etc)
-        # [:=\-\s\(]+ : delimiters
-        # (\b10\b|\b\d\b) : Matches 10 or single digit 0-9
-        # (?:/10)? : Optional /10 suffix (ignored but allowed)
         pattern = re.compile(fr'(?i){pattern_str}.*?[:=\-\s\(]+(\b10\b|\b\d\b)(?:/10)?')
         match = pattern.search(text)
         if match:
-            # If we already have a score and this is a weak match (accuracy), skip? 
-            # For now, overwrite only if 0.
             if scores[key] == '0':
                 scores[key] = match.group(1)
     
@@ -110,11 +99,6 @@ def parse_veracity_toon(text: str) -> dict:
 
     # 2. Robust Regex for TOON Block Headers
     # Matches: key : type [ count ] { headers } :
-    # Changes: 
-    # - Removed ^ anchor to allow finding blocks inside text reports
-    # - Made type optional (?:\w+\s*)?
-    # - Made count optional (?:\[...\])?
-    # - Headers captured in group 3
     block_pattern = re.compile(
         r'([a-zA-Z0-9_]+)\s*:\s*(?:\w+\s*)?(?:\[\s*(\d+)\s*\])?\s*\{\s*(.*?)\s*\}\s*:\s*', 
         re.MULTILINE
@@ -137,8 +121,7 @@ def parse_veracity_toon(text: str) -> dict:
         lines = [line.strip() for line in block_content.splitlines() if line.strip()]
         
         data_items = []
-        # If count says 1 but lines are empty, try to grab the first non-empty line
-        valid_lines = [l for l in lines if len(l) > 1] # Filter tiny garbage
+        valid_lines = [l for l in lines if len(l) > 1] 
         
         for line in valid_lines[:count]:
             item = parse_toon_line({'key': key, 'headers': headers}, line)
@@ -164,6 +147,7 @@ def parse_veracity_toon(text: str) -> dict:
             'audio_caption_score': '0'
         },
         'video_context_summary': '',
+        'tags': [],
         'factuality_factors': {},
         'disinformation_analysis': {},
         'final_assessment': {}
@@ -218,17 +202,14 @@ def parse_veracity_toon(text: str) -> dict:
             elif 'audiocaption' in cat: flat_result['modalities']['audio_caption_score'] = score
 
     # --- FUZZY FALLBACK ---
-    # Only run if we are missing critical data
     if not got_vectors or not got_modalities:
         fuzzy_scores = fuzzy_extract_scores(text)
-        
         if not got_vectors:
             flat_result['veracity_vectors']['visual_integrity_score'] = fuzzy_scores['visual']
             flat_result['veracity_vectors']['audio_integrity_score'] = fuzzy_scores['audio']
             flat_result['veracity_vectors']['source_credibility_score'] = fuzzy_scores['source']
             flat_result['veracity_vectors']['logical_consistency_score'] = fuzzy_scores['logic']
             flat_result['veracity_vectors']['emotional_manipulation_score'] = fuzzy_scores['emotion']
-            
         if not got_modalities:
             flat_result['modalities']['video_audio_score'] = fuzzy_scores['video_audio']
             flat_result['modalities']['video_caption_score'] = fuzzy_scores['video_caption']
@@ -260,7 +241,14 @@ def parse_veracity_toon(text: str) -> dict:
         'reasoning': fn.get('reasoning', '')
     }
 
-    # 6. Summary
+    # 6. Tags (New)
+    t = parsed_sections.get('tags', {})
+    if isinstance(t, list): t = t[0] if t else {}
+    raw_tags = t.get('keywords', '')
+    if raw_tags:
+        flat_result['tags'] = [x.strip() for x in raw_tags.split(',')]
+
+    # 7. Summary
     s = parsed_sections.get('summary', {})
     if isinstance(s, list): s = s[0] if s else {}
     flat_result['video_context_summary'] = s.get('text', '')

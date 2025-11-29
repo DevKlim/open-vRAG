@@ -1,30 +1,64 @@
-# VideoChat-R1.5 Web Interface
+# liarMP4: Multimodal Content Moderation via Fractal Chain-of-Thought
 
-This project provides a complete, runnable environment to interact with our fine-tuned model based on `OpenGVLab/VideoChat-R1_5`.
+## Research Overview
 
-## Quick Start with Docker
+The liarMP4 project investigates the efficacy of Generative AI (GenAI) systems in detecting "contextual malformation" in video content, as opposed to traditional Predictive AI (PredAI) which focuses on metadata and engagement velocity.
 
-1.  **Build and run:**
+While traditional content moderation relies on scalar probabilities derived from tabular data (account age, keyword triggers), this research proposes a **Fractal Chain-of-Thought (FCoT)** methodology. This approach utilizes Multimodal Large Language Models (MLLMs) to analyze the semantic dissonance between visual evidence, audio waveforms, and textual claims.
+
+The system generates **Veracity Vectors**—multi-dimensional scores representing Visual Integrity, Audio Integrity, and Cross-Modal Alignment—outputting data in a strict Token-Oriented Object Notation (TOON) schema.
+
+## Key Features
+
+*   **Predictive Benchmarking:** Comparison against AutoGluon/XGBoost models trained on engagement metadata.
+*   **Fractal Chain-of-Thought (FCoT):** A recursive inference strategy that hypothesizes intent at a macro-scale and verifies pixel/audio artifacts at a meso-scale.
+*   **TOON Schema:** A standardized output format ensuring strict type adherence for database integration.
+*   **Human-in-the-Loop (HITL) Protocol:** A browser-based grounding workflow to calibrate AI "reasoning" against human authorial intent.
+
+## Project Resources
+
+*   **Live Demonstration (Hugging Face):** [https://huggingface.co/spaces/GlazedDon0t/liarMP4](https://huggingface.co/spaces/GlazedDon0t/liarMP4)
+*   **Source Code (GitHub):** [https://github.com/DevKlim/LiarMP4](https://github.com/DevKlim/LiarMP4)
+
+## Repository Structure
+
+*   **src/**: Core inference logic for the Generative AI pipeline and FCoT implementation.
+*   **preprocessing_tools/**: Scripts for training Predictive AI models (AutoGluon) on tabular datasets.
+*   **extension/**: Browser extension source code for the Human-in-the-Loop labeling workflow.
+*   **data/**: Benchmark datasets containing engagement metadata and manual veracity labels.
+
+## Installation and Usage
+
+This project is containerized to ensure reproducibility across different environments. The entire pipeline, including the inference logic and database connections, can be deployed using Docker.
+
+### Prerequisites
+
+*   Docker Engine
+*   Docker Compose
+
+### Deployment Instructions
+
+1.  Clone the repository:
     ```bash
-    docker-compose up --build -d
+    git clone https://github.com/DevKlim/LiarMP4.git
     ```
 
-2.  **Access the UI:**
-    http://localhost:8005
+2.  Navigate to the project directory:
+    ```bash
+    cd LiarMP4/liarMP4
+    ```
 
-## Project Structure
+3.  Build and run the containerized environment:
+    ```bash
+    docker-compose up --build
+    ```
 
--   `src/`: Python backend and model logic.
--   `frontend/`: React/Vite web interface.
--   `data/`: Storage for datasets, labels, and videos.
--   `model/`: Place model weights here (mapped to container).
+The system will initialize the backend services and expose the necessary endpoints for the analysis pipeline.
 
-## Fine-Tuning the Model
+## License
 
-To run fine-tuning, execute the script inside the container:
+This research project is open-source. Please refer to the LICENSE file in the repository for specific terms regarding usage and distribution.
 
-```bash
-docker exec -it videochat_webui python src/finetune.py
-```
+## Authors
 
-Ensure your dataset is located at `data/insertlocaldataset.jsonl`.
+Kliment Ho, Shiwei Yang, Keqing Li
