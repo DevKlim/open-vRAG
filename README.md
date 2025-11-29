@@ -4,13 +4,13 @@
 
 The liarMP4 project investigates the efficacy of Generative AI (GenAI) systems in detecting "contextual malformation" in video content, as opposed to traditional Predictive AI (PredAI) which focuses on metadata and engagement velocity.
 
-While traditional content moderation relies on scalar probabilities derived from tabular data (account age, keyword triggers), this research proposes a **Fractal Chain-of-Thought (FCoT)** methodology. This approach utilizes Multimodal Large Language Models (MLLMs) to analyze the semantic dissonance between visual evidence, audio waveforms, and textual claims.
+While traditional content moderation relies on scalar probabilities derived from tabular data (account age, keyword triggers), this research proposes a **Fractal Chain-of-Thought** methodology. This approach utilizes Multimodal Large Language Models to analyze the semantic dissonance between visual evidence, audio waveforms, and textual claims.
 
-The system generates **Veracity Vectors**—multi-dimensional scores representing Visual Integrity, Audio Integrity, and Cross-Modal Alignment—outputting data in a strict Token-Oriented Object Notation (TOON) schema.
+The system generates **Veracity Vectors**, multi-dimensional scores representing Visual Integrity, Audio Integrity, and Cross-Modal Alignment—outputting data in a strict Token-Oriented Object Notation (TOON) schema.
 
 ## Key Features
 
-*   **Predictive Benchmarking:** Comparison against AutoGluon/XGBoost models trained on engagement metadata.
+*   **Predictive Benchmarking:** Comparison against AutoGluon/Gradient Boosting models trained on engagement metadata.
 *   **Fractal Chain-of-Thought (FCoT):** A recursive inference strategy that hypothesizes intent at a macro-scale and verifies pixel/audio artifacts at a meso-scale.
 *   **TOON Schema:** A standardized output format ensuring strict type adherence for database integration.
 *   **Human-in-the-Loop (HITL) Protocol:** A browser-based grounding workflow to calibrate AI "reasoning" against human authorial intent.
@@ -23,7 +23,7 @@ The system generates **Veracity Vectors**—multi-dimensional scores representin
 ## Repository Structure
 
 *   **src/**: Core inference logic for the Generative AI pipeline and FCoT implementation.
-*   **preprocessing_tools/**: Scripts for training Predictive AI models (AutoGluon) on tabular datasets.
+*   **preprocessing_tools/**: Scripts for training Predictive AI models on tabular datasets.
 *   **extension/**: Browser extension source code for the Human-in-the-Loop labeling workflow.
 *   **data/**: Benchmark datasets containing engagement metadata and manual veracity labels.
 
