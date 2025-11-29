@@ -48,13 +48,21 @@ active_model = None
 logger = logging.getLogger(__name__)
 
 def load_models():
+    # FIX: Declare globals at the start
+    global LITE_MODE, processor, base_model, peft_model, active_model
+    
     if LITE_MODE:
         logger.info("LITE_MODE is enabled. Skipping local model loading.")
         return
-    global processor, base_model, peft_model, active_model
+    
     if base_model is not None: return
+    
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is not available. This application requires a GPU for local models.")
+        # In the root container, assume GPU is needed unless forcing LITE mode logic was desired.
+        # However, to match the fix:
+        logger.warning("CUDA is not available. This application requires a GPU for local models. Switching to LITE_MODE.")
+        LITE_MODE = True
+        return
     
     device = torch.device("cuda")
     logger.info(f"CUDA is available. Initializing models on {device}...")
@@ -67,11 +75,15 @@ def load_models():
         attn_implementation = "sdpa"
 
     logger.info(f"Loading base model from {local_model_path}...")
-    base_model = Qwen3VLForConditionalGeneration.from_pretrained(
-        local_model_path, dtype=torch.bfloat16, device_map="auto", attn_implementation=attn_implementation
-    ).eval()
-    processor = AutoProcessor.from_pretrained(local_model_path)
-    active_model = base_model
+    try:
+        base_model = Qwen3VLForConditionalGeneration.from_pretrained(
+            local_model_path, dtype=torch.bfloat16, device_map="auto", attn_implementation=attn_implementation
+        ).eval()
+        processor = AutoProcessor.from_pretrained(local_model_path)
+        active_model = base_model
+    except Exception as e:
+        logger.error(f"Failed to load local model: {e}")
+        LITE_MODE = True
 
 def switch_active_model(model_name: str):
     global active_model, base_model, peft_model
@@ -126,9 +138,6 @@ async def run_inference_pipeline(video_path, question, generation_config, prompt
     yield f"\n Final Answer \n{final_answer}\n"
 
 async def attempt_toon_repair(original_text: str, schema: str, client, model_type: str, config: dict):
-    """
-    Uses a secondary AI call to fix malformed output into valid TOON format.
-    """
     logger.info("Attempting TOON Repair via separate AI call...")
     repair_prompt = (
         f"SYSTEM: You are a data formatting expert. The following output from a previous model "

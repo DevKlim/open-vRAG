@@ -3,7 +3,8 @@ import {
   AlertCircle, Play, Upload, Layers, Terminal, Cpu, Activity, 
   FileText, Zap, MessageSquare, Sliders, LayoutDashboard, FileJson, 
   ChevronDown, ChevronRight, Bot, Database, Trash2, Eye, StopCircle, List,
-  CheckCircle, XCircle, BrainCircuit, Edit3, ClipboardList, CheckSquare
+  CheckCircle, XCircle, BrainCircuit, Edit3, ClipboardList, CheckSquare,
+  BarChart2, TrendingUp, TrendingDown, Scale, ExternalLink
 } from 'lucide-react';
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
   const [dataList, setDataList] = useState<any[]>([]);
   const [queueList, setQueueList] = useState<any[]>([]);
   const [workflowList, setWorkflowList] = useState<any[]>([]);
+  const [comparisonList, setComparisonList] = useState<any[]>([]);
   
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -49,6 +51,9 @@ function App() {
     }
     if (activeTab === 'workflow') {
       fetch('/workflow/status').then(res => res.json()).then(setWorkflowList).catch(err => console.error("Workflow Load Error:", err));
+    }
+    if (activeTab === 'analytics') {
+      fetch('/manage/comparison_data').then(res => res.json()).then(setComparisonList).catch(err => console.error("Analytics Load Error:", err));
     }
   }, [activeTab, refreshTrigger]);
 
@@ -217,6 +222,22 @@ function App() {
   const pendingAI = workflowList.filter(row => row.ai_status !== 'Labeled' && row.manual_status !== 'Completed');
   const completed = workflowList.filter(row => row.manual_status === 'Completed');
 
+  // Helper for Analytics Summary
+  const calculateStats = () => {
+      if(comparisonList.length === 0) return { avgDelta: 0, bias: 0 };
+      let totalDelta = 0;
+      let totalAbsDelta = 0;
+      comparisonList.forEach(c => {
+          totalDelta += c.deltas.final; // Raw delta (+ means AI > Human)
+          totalAbsDelta += Math.abs(c.deltas.final);
+      });
+      return {
+          avgMAE: (totalAbsDelta / comparisonList.length).toFixed(1),
+          bias: (totalDelta / comparisonList.length).toFixed(1)
+      };
+  };
+  const stats = calculateStats();
+
   return (
     <div className="flex h-screen w-full bg-[#09090b] text-slate-200 font-sans overflow-hidden">
       
@@ -234,7 +255,7 @@ function App() {
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
           <form id="control-form" className="space-y-6">
             <div className="grid grid-cols-2 gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800">
-               {[{id:'queue',l:'Ingest Queue',i:List}, {id:'workflow',l:'Labeling Workflow',i:ClipboardList}, {id:'moderation',l:'Dataset',i:Database}, {id:'manual',l:'Quick Test',i:Play}].map(t => (
+               {[{id:'queue',l:'Ingest Queue',i:List}, {id:'workflow',l:'Labeling Workflow',i:ClipboardList}, {id:'moderation',l:'Dataset',i:Database}, {id:'analytics',l:'Showcase',i:BarChart2}].map(t => (
                   <button key={t.id} type="button" onClick={() => setActiveTab(t.id)}
                     className={`flex items-center justify-center gap-2 py-2 text-xs font-medium rounded ${activeTab===t.id ? 'bg-slate-800 text-white' : 'text-slate-500'}`}>
                     <t.i className="w-3 h-3" /> {t.l}
@@ -302,13 +323,6 @@ function App() {
                  </div>
                </div>
             )}
-
-            {activeTab === 'manual' && (
-               <div className="space-y-2">
-                   <label className="text-xs font-bold text-slate-500 uppercase">Single Video URL</label>
-                   <input type="text" name="video_url" value={videoUrl} onChange={e=>setVideoUrl(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs" />
-               </div>
-            )}
             
             <div className="flex items-center gap-2 mt-4 bg-slate-900 p-2 rounded border border-slate-800">
                <input type="checkbox" name="include_comments" id="include_comments" value="true" className="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-offset-0 focus:ring-0" />
@@ -353,7 +367,11 @@ function App() {
                             <tbody className="divide-y divide-slate-800/50">
                                 {queueList.map((q,i) => (
                                     <tr key={i} className="hover:bg-white/5">
-                                        <td className="p-3 truncate max-w-[300px] text-sky-500">{q.link}</td>
+                                        <td className="p-3 truncate max-w-[300px] text-sky-500">
+                                            <a href={q.link} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                                                {q.link} <ExternalLink className="w-3 h-3"/>
+                                            </a>
+                                        </td>
                                         <td className="p-3 text-slate-500">{q.timestamp}</td>
                                         <td className="p-3"><span className={`px-2 py-0.5 rounded ${q.status==='Processed' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>{q.status}</span></td>
                                         <td className="p-3 text-right">
@@ -370,6 +388,87 @@ function App() {
                     <div className="h-1/2 bg-black/40 border border-slate-800 rounded-xl p-4 font-mono text-[11px] text-slate-300 overflow-auto">
                         <pre>{logs}</pre>
                         <div ref={logEndRef} />
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'analytics' && (
+                <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-6">
+                    {/* Header Stats */}
+                    <div className="grid grid-cols-4 gap-4">
+                        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+                            <h4 className="text-xs text-slate-500 uppercase font-bold">Total Verified</h4>
+                            <div className="text-2xl font-bold text-white mt-1">{comparisonList.length}</div>
+                        </div>
+                        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+                            <h4 className="text-xs text-slate-500 uppercase font-bold">MAE (Mean Err)</h4>
+                            <div className="text-2xl font-bold text-sky-400 mt-1">{stats.avgMAE}</div>
+                            <div className="text-[10px] text-slate-500">Average absolute deviation</div>
+                        </div>
+                        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+                            <h4 className="text-xs text-slate-500 uppercase font-bold">AI Bias</h4>
+                            <div className="text-2xl font-bold text-amber-400 mt-1">{Number(stats.bias) > 0 ? "+" : ""}{stats.bias}</div>
+                            <div className="text-[10px] text-slate-500">Positive = AI scores higher than human</div>
+                        </div>
+                    </div>
+
+                    {/* Comparison Chart List */}
+                    <div className="bg-slate-900/30 border border-slate-800 rounded-xl overflow-hidden">
+                       <div className="p-4 bg-slate-950 border-b border-slate-800 flex justify-between items-center">
+                            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                                <Scale className="w-4 h-4 text-indigo-500"/> Verification Showcase
+                            </h3>
+                       </div>
+                       <table className="w-full text-left text-xs text-slate-400">
+                           <thead className="bg-slate-900 text-slate-300">
+                               <tr>
+                                   <th className="p-3 w-1/4">Video / Link</th>
+                                   <th className="p-3 w-1/2">Score Comparison (AI vs Manual)</th>
+                                   <th className="p-3 text-right">Delta</th>
+                               </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-800/50">
+                               {comparisonList.map((item, i) => (
+                                   <tr key={i} className="hover:bg-white/5">
+                                       <td className="p-3">
+                                           <div className="text-sky-500 truncate max-w-[200px]" title={item.link}>
+                                               <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                                                   {item.link} <ExternalLink className="w-3 h-3"/>
+                                               </a>
+                                           </div>
+                                           <div className="text-[10px] text-slate-600 font-mono">{item.id}</div>
+                                       </td>
+                                       <td className="p-3">
+                                           {/* Visual Integrity Bar */}
+                                           <div className="flex items-center gap-2 mb-1">
+                                               <span className="w-16 text-[10px] text-slate-500">Visual</span>
+                                               <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden flex relative">
+                                                   <div className="absolute top-0 bottom-0 bg-indigo-500/50" style={{left:0, width:`${item.scores.visual.ai * 10}%`}}></div>
+                                                   <div className="absolute top-0 bottom-0 border-l-2 border-emerald-500 h-full" style={{left:`${item.scores.visual.manual * 10}%`}}></div>
+                                               </div>
+                                               <span className="text-[10px] font-mono"><span className="text-indigo-400">{item.scores.visual.ai}</span> / <span className="text-emerald-400">{item.scores.visual.manual}</span></span>
+                                           </div>
+                                            {/* Final Veracity Bar */}
+                                           <div className="flex items-center gap-2">
+                                               <span className="w-16 text-[10px] text-slate-500 font-bold">Final</span>
+                                               <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden flex relative">
+                                                   {/* AI Score */}
+                                                   <div className="bg-indigo-600 h-full" style={{width:`${item.scores.final.ai}%`}}></div>
+                                               </div>
+                                                {/* Manual Marker */}
+                                               <div className="w-1 h-3 bg-emerald-500 -ml-1 z-10"></div>
+                                               <span className="text-[10px] font-mono"><span className="text-indigo-400">{item.scores.final.ai}</span> / <span className="text-emerald-400">{item.scores.final.manual}</span></span>
+                                           </div>
+                                       </td>
+                                       <td className="p-3 text-right">
+                                           <div className={`font-bold ${Math.abs(item.deltas.final) > 20 ? 'text-red-500' : 'text-slate-400'}`}>
+                                               {item.deltas.final > 0 ? "+" : ""}{item.deltas.final}
+                                           </div>
+                                       </td>
+                                   </tr>
+                               ))}
+                           </tbody>
+                       </table>
                     </div>
                 </div>
             )}
@@ -416,7 +515,11 @@ function App() {
                                 <tbody className="divide-y divide-slate-800/50">
                                 {pendingVerification.map((row, i) => (
                                     <tr key={i} className="hover:bg-white/5 cursor-pointer" onClick={() => openLabelingModal(row)}>
-                                        <td className="p-4 truncate max-w-[400px] text-sky-400">{row.link}</td>
+                                        <td className="p-4 truncate max-w-[400px] text-sky-400">
+                                            <a href={row.link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="hover:underline flex items-center gap-1">
+                                                {row.link} <ExternalLink className="w-3 h-3"/>
+                                            </a>
+                                        </td>
                                         <td className="p-4">
                                             <span className="flex items-center gap-1 text-emerald-400">
                                                 <BrainCircuit className="w-3 h-3"/> {row.ai_data?.final}
@@ -444,7 +547,11 @@ function App() {
                             <tbody className="divide-y divide-slate-800/50">
                             {pendingAI.slice(0, 10).map((row, i) => (
                                 <tr key={i}>
-                                    <td className="p-3 truncate max-w-[400px] opacity-60">{row.link}</td>
+                                    <td className="p-3 truncate max-w-[400px] opacity-60">
+                                        <a href={row.link} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-sky-400 flex items-center gap-1">
+                                            {row.link} <ExternalLink className="w-3 h-3"/>
+                                        </a>
+                                    </td>
                                     <td className="p-3 text-right">
                                         <span className="px-2 py-0.5 bg-slate-800 rounded text-slate-400">Pending AI</span>
                                     </td>
@@ -464,7 +571,11 @@ function App() {
                             <tbody className="divide-y divide-slate-800/50">
                             {completed.slice(0, 10).map((row, i) => (
                                 <tr key={i}>
-                                    <td className="p-3 truncate max-w-[400px] opacity-60 text-emerald-500/50">{row.link}</td>
+                                    <td className="p-3 truncate max-w-[400px] opacity-60 text-emerald-500/50">
+                                        <a href={row.link} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-emerald-400 flex items-center gap-1">
+                                            {row.link} <ExternalLink className="w-3 h-3"/>
+                                        </a>
+                                    </td>
                                     <td className="p-3 opacity-60">Tags: {row.manual_tags || "-"}</td>
                                     <td className="p-3 text-right">
                                         <CheckSquare className="w-4 h-4 text-emerald-600 inline"/>
@@ -493,7 +604,11 @@ function App() {
                                  </td>
                                  <td className="p-4">
                                      <div className="truncate max-w-[250px] text-white mb-1" title={row.caption}>{row.caption || 'No Caption'}</div>
-                                     <div className="truncate max-w-[250px] text-[10px] text-slate-600">{row.link}</div>
+                                     <div className="truncate max-w-[250px] text-[10px] text-slate-600">
+                                        <a href={row.link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="hover:text-indigo-400 hover:underline flex items-center gap-1">
+                                             {row.link} <ExternalLink className="w-3 h-3"/>
+                                        </a>
+                                     </div>
                                      {row.tags && <div className="mt-1 text-[9px] text-emerald-400 font-mono">{row.tags}</div>}
                                  </td>
                                  <td className="p-4 font-mono">
@@ -565,7 +680,11 @@ function App() {
                      </div>
                      <div className="p-6 flex-1 overflow-y-auto">
                          <div className="mb-6 bg-slate-900 p-4 rounded border border-slate-800">
-                             <p className="text-xs text-indigo-400 font-mono mb-2">{labelingItem.link}</p>
+                             <div className="flex items-center gap-2 mb-2">
+                                <a href={labelingItem.link} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 font-mono hover:underline flex items-center gap-2">
+                                     {labelingItem.link} <ExternalLink className="w-3 h-3"/>
+                                </a>
+                             </div>
                              {labelingItem.ai_data?.reasoning && (
                                  <div className="text-xs text-slate-500 italic border-l-2 border-indigo-500 pl-3">
                                      "AI Reasoning: {labelingItem.ai_data.reasoning}"

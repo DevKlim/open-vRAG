@@ -27,6 +27,7 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Check if request is for the API
 		// Added /queue to the list so uploads and list fetches work
+		// ADDED: /workflow to fix JSON parse error in frontend
 		if strings.HasPrefix(r.URL.Path, "/process") ||
 			strings.HasPrefix(r.URL.Path, "/label_video") ||
 			strings.HasPrefix(r.URL.Path, "/batch_label") ||
@@ -34,6 +35,7 @@ func main() {
 			strings.HasPrefix(r.URL.Path, "/download-dataset") ||
 			strings.HasPrefix(r.URL.Path, "/extension") ||
 			strings.HasPrefix(r.URL.Path, "/manage") ||
+			strings.HasPrefix(r.URL.Path, "/workflow") ||
 			strings.HasPrefix(r.URL.Path, "/queue") {
 
 			log.Printf("Proxying %s to Python Backend...", r.URL.Path)
