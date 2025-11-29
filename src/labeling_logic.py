@@ -48,10 +48,8 @@ SCORE_INSTRUCTIONS_SIMPLE = """
 **Constraint:** Focus on objective measurements. Keep text concise.
 """
 
-# Schema definitions
-# Simple: Vectors are a single object (1 line).
-SCHEMA_SIMPLE = """
-summary: text[1]{text}:
+# Updated Schema based on user requirements - Ensure explicit newlines
+SCHEMA_SIMPLE = """summary: text[1]{text}:
 "Brief neutral summary of the video events"
 
 vectors: scores[1]{visual,audio,source,logic,emotion}:
@@ -72,8 +70,6 @@ final: assessment[1]{score,reasoning}:
 (Int 1-100),"Final synthesis of why this score was given"
 """
 
-# Reasoning: Vectors are a table.
-# NOTE: 'modalities' block uses specific category names for the parser: VideoAudio, VideoCaption, AudioCaption
 SCHEMA_REASONING = """
 summary: text[1]{text}:
 "Brief neutral summary of the video events"
@@ -98,4 +94,58 @@ disinfo: analysis[1]{class,intent,threat}:
 
 final: assessment[1]{score,reasoning}:
 (Int 1-100),"Final synthesis of why this score was given"
+"""
+
+# ==========================================
+# Fractal Chain of Thought (FCoT) Prompts
+# ==========================================
+
+FCOT_MACRO_PROMPT = """
+**Fractal Chain of Thought - Stage 1: Macro-Scale Hypothesis (Wide Aperture)**
+
+You are analyzing a video for factuality.
+**Context:** Caption: "{caption}" | Transcript: "{transcript}"
+
+1. **Global Scan**: Observe the video, audio, and caption as a whole entity.
+2. **Context Aperture**: Wide. Assess the overall intent (Humor, Information, Political, Social) and the setting.
+3. **Macro Hypothesis**: Formulate a high-level hypothesis about the veracity. (e.g., "The video is likely authentic but the caption misrepresents the location" or "The audio quality suggests synthetic generation").
+
+**Objective**: Maximize **Coverage** (broadly explore potential angles of manipulation).
+
+**Output**: A concise paragraph summarizing the "Macro Hypothesis".
+"""
+
+FCOT_MESO_PROMPT = """
+**Fractal Chain of Thought - Stage 2: Meso-Scale Expansion (Recursive Verification)**
+
+**Current Macro Hypothesis**: "{macro_hypothesis}"
+
+**Action**: Zoom In. Decompose the hypothesis into specific verification branches.
+Perform the following checks recursively:
+
+1. **Visual Branch**: Look for specific artifacts, lighting inconsistencies, cuts, or deepfake signs.
+2. **Audio Branch**: Analyze lip-sync, background noise consistency, and voice tonality.
+3. **Logical Branch**: Does the visual evidence strictly support the caption's claim? Are there logical fallacies?
+
+**Dual-Objective Self-Correction**:
+- **Faithfulness**: Do not hallucinate details not present in the video.
+- **Coverage**: Did you miss any subtle cues?
+
+**Output**: Detailed "Micro-Observations" for each branch. If you find contradictions to the Macro Hypothesis, note them explicitly as **"Self-Correction"**.
+"""
+
+FCOT_SYNTHESIS_PROMPT = """
+**Fractal Chain of Thought - Stage 3: Inter-Scale Consensus & Synthesis**
+
+**Action**: Integrate your Macro Hypothesis and Micro-Observations.
+- **Consensus Check**: If Micro-Observations contradict the Macro Hypothesis, prioritize the Micro evidence (Self-Correction).
+- **Compression**: Synthesize the findings into the final structured format.
+
+**Output Format**:
+Strictly fill out the following TOON schema based on the consensus. Do not include markdown code blocks.
+
+**TOON SCHEMA**:
+{toon_schema}
+
+{score_instructions}
 """

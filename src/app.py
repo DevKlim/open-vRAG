@@ -63,6 +63,8 @@ templates = Jinja2Templates(directory=STATIC_DIR)
 os.makedirs("data/videos", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 os.makedirs("data/labels", exist_ok=True)
+os.makedirs("data/prompts", exist_ok=True) 
+os.makedirs("data/responses", exist_ok=True) # Ensure raw responses folder exists
 os.makedirs("metadata", exist_ok=True)
 
 STOP_QUEUE_SIGNAL = False
@@ -127,18 +129,41 @@ def extract_tweet_id(url: str) -> str | None:
 
 def check_if_processed(link: str) -> bool:
     target_id = extract_tweet_id(link)
-    link_clean = link.split('?')[0].strip()
+    # Normalize link: remove query params, strip slash
+    link_clean = link.split('?')[0].strip().rstrip('/')
     
     for filename in ["data/dataset.csv", "data/manual_dataset.csv"]:
         path = Path(filename)
         if not path.exists(): continue
         try:
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    row_link = row.get('link', '').split('?')[0].strip()
-                    if row_link == link_clean: return True
-                    if target_id and row.get('id') == target_id: return True
+                # Basic check using CSV sniffer to avoid crashes on bad files
+                sample = f.read(2048)
+                f.seek(0)
+                has_header = False
+                try:
+                    has_header = csv.Sniffer().has_header(sample)
+                except:
+                    has_header = True # Default to assume header if sniff fails on small files
+
+                if has_header:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # Compare Links
+                        row_link = row.get('link', '').split('?')[0].strip().rstrip('/')
+                        if row_link == link_clean: return True
+                        
+                        # Compare IDs (if Twitter/X)
+                        row_id = row.get('id', '')
+                        if target_id and row_id == target_id: return True
+                else:
+                    # Fallback for headerless
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if not row: continue
+                        # Fallback raw search
+                        if link_clean in row: return True
+                        if target_id and target_id in row: return True
         except Exception:
             continue
     return False
@@ -230,7 +255,7 @@ async def generate_and_save_croissant_metadata(row_data: dict) -> str:
     except Exception:
         return "N/A (Error)"
 
-async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool):
+async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config: dict, model_selection: str, include_comments: bool, reasoning_method: str = "cot"):
     try:
         yield f"Downloading assets for {video_url}..."
         paths = await prepare_video_assets_async(video_url)
@@ -238,7 +263,7 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
         transcript_text = parse_vtt(paths["transcript"]) if paths["transcript"] else "No transcript."
         caption = paths["metadata"].get("caption", "")
         
-        yield f"Assets ready. Running inference ({model_selection})..."
+        yield f"Assets ready. Running inference ({model_selection}, {reasoning_method.upper()})..."
         final_labels = None
         raw_toon = ""
         prompt_used = ""
@@ -246,7 +271,7 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
         pipeline = inference_logic.run_gemini_labeling_pipeline if model_selection == 'gemini' else inference_logic.run_vertex_labeling_pipeline
         config = gemini_config if model_selection == 'gemini' else vertex_config
         
-        async for msg in pipeline(video_path, caption, transcript_text, config, include_comments):
+        async for msg in pipeline(video_path, caption, transcript_text, config, include_comments, reasoning_method):
             if isinstance(msg, dict) and "parsed_data" in msg:
                 final_labels = msg["parsed_data"]
                 raw_toon = msg.get("raw_toon", "")
@@ -257,7 +282,8 @@ async def get_labels_for_link(video_url: str, gemini_config: dict, vertex_config
         
         final_labels["meta_info"] = {
             "prompt_used": prompt_used,
-            "model_selection": model_selection
+            "model_selection": model_selection,
+            "reasoning_method": reasoning_method
         }
         
         vec = final_labels.get("veracity_vectors", {})
@@ -306,6 +332,46 @@ async def get_queue_list():
                     "status": status
                 })
     return items
+
+@app.delete("/queue/delete")
+async def delete_queue_item(link: str):
+    queue_path = Path("data/batch_queue.csv")
+    if not queue_path.exists():
+        return {"status": "error", "message": "Queue file not found"}
+    
+    rows = []
+    deleted = False
+    try:
+        # Read everything first
+        with open(queue_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        
+        # Rewrite excluding the match
+        new_rows = []
+        if rows and len(rows) > 0 and rows[0][0] == "link":
+             # Keep header
+             new_rows.append(rows[0])
+             rows = rows[1:]
+
+        for row in rows:
+            if not row: continue
+            if row[0] == link:
+                deleted = True
+            else:
+                new_rows.append(row)
+        
+        with open(queue_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerows(new_rows)
+            
+        if deleted:
+            return {"status": "success", "link": link}
+        else:
+            return {"status": "not_found", "message": "Link not found in queue"}
+            
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.post("/queue/stop")
 async def stop_queue_processing():
@@ -367,7 +433,8 @@ async def run_queue_processing(
     model_selection: str = Form(...),
     gemini_api_key: str = Form(""), gemini_model_name: str = Form(""),
     vertex_project_id: str = Form(""), vertex_location: str = Form(""), vertex_model_name: str = Form(""), vertex_api_key: str = Form(""),
-    include_comments: bool = Form(False)
+    include_comments: bool = Form(False),
+    reasoning_method: str = Form("cot")
 ):
     global STOP_QUEUE_SIGNAL
     STOP_QUEUE_SIGNAL = False
@@ -402,7 +469,7 @@ async def run_queue_processing(
             
             yield f"data: [START] {i+1}/{total}: {link}\n\n"
             final_data = None
-            async for res in get_labels_for_link(link, gemini_config, vertex_config, model_selection, include_comments):
+            async for res in get_labels_for_link(link, gemini_config, vertex_config, model_selection, include_comments, reasoning_method):
                 if isinstance(res, str): yield f"data: {res}\n\n"
                 if isinstance(res, dict) and "csv_row" in res: final_data = res
             
@@ -411,13 +478,29 @@ async def run_queue_processing(
                 vid_id = row["id"]
                 ts = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
                 
+                # 1. Save JSON
                 json_path = f"data/labels/{vid_id}_{ts}_labels.json"
                 with open(json_path, 'w') as f: json.dump(final_data["full_json"], f, indent=2)
+                
+                # 2. Save TOON
                 with open(f"data/labels/{vid_id}_{ts}.toon", 'w') as f: f.write(final_data["raw_toon"])
                 
+                # 3. Save Prompt (New Requirement)
+                prompt_content = final_data.get("full_json", {}).get("meta_info", {}).get("prompt_used", "")
+                if prompt_content:
+                    with open(f"data/prompts/{vid_id}_{ts}_prompt.txt", 'w', encoding='utf-8') as f:
+                        f.write(prompt_content)
+
+                # 4. Save Raw Response with ID name (New Requirement)
+                raw_response = final_data.get("raw_toon", "")
+                if raw_response:
+                    with open(f"data/responses/{vid_id}.txt", 'w', encoding='utf-8') as f:
+                        f.write(raw_response)
+
                 row["metadatapath"] = await generate_and_save_croissant_metadata(row)
                 row["json_path"] = json_path
                 
+                # 5. Save to CSV
                 dpath = Path("data/dataset.csv")
                 exists = dpath.exists()
                 with open(dpath, 'a', newline='', encoding='utf-8') as f:
@@ -540,22 +623,7 @@ async def extension_save_manual(request: Request):
         dpath = Path("data/manual_dataset.csv")
         exists = dpath.exists()
         
-        # Determine fields dynamically but ensure stats are captured
-        # Note: If the CSV exists with fewer columns, DictWriter might drop keys if not in fieldnames
-        # We will read the header first if it exists to append new columns safely if possible,
-        # or just write standard fields. For now, we trust DictWriter logic.
-        
         fieldnames = list(row_data.keys())
-        
-        # If file exists, we must use its fieldnames or we break the CSV structure
-        # unless we want to support schema evolution (too complex for now).
-        # We'll just append. If columns missing in file, they are ignored by most readers or handled.
-        # BUT DictWriter throws ValueError if fieldnames has extra keys and extrasaction='raise'.
-        # We use 'ignore' to be safe against file schema mismatch, 
-        # BUT we want to save the stats.
-        # Ideally, we should check header and re-write file if columns missing.
-        
-        # Simplified approach: just write. If it's a fresh file, it gets all columns.
         
         with open(dpath, 'a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
@@ -635,12 +703,13 @@ async def label_video_endpoint(
     video_url: str = Form(...), model_selection: str = Form(...),
     gemini_api_key: str = Form(""), gemini_model_name: str = Form(""),
     vertex_project_id: str = Form(""), vertex_location: str = Form(""), vertex_model_name: str = Form(""), vertex_api_key: str = Form(""),
-    include_comments: bool = Form(False)
+    include_comments: bool = Form(False),
+    reasoning_method: str = Form("cot")
 ):
     gemini_config = {"api_key": gemini_api_key, "model_name": gemini_model_name}
     vertex_config = {"project_id": vertex_project_id, "location": vertex_location, "model_name": vertex_model_name, "api_key": vertex_api_key}
     async def stream():
-        async for msg in get_labels_for_link(video_url, gemini_config, vertex_config, model_selection, include_comments):
+        async for msg in get_labels_for_link(video_url, gemini_config, vertex_config, model_selection, include_comments, reasoning_method):
              if isinstance(msg, str): yield f"data: {msg}\n\n"
              if isinstance(msg, dict) and "csv_row" in msg: yield "data: Done. Labels generated.\n\n"
         yield "event: close\ndata: Done.\n\n"

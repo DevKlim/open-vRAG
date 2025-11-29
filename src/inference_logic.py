@@ -11,7 +11,8 @@ from peft import PeftModel
 from my_vision_process import process_vision_info, client
 from labeling_logic import (
     LABELING_PROMPT_TEMPLATE, SCORE_INSTRUCTIONS_SIMPLE, SCORE_INSTRUCTIONS_REASONING,
-    SCHEMA_SIMPLE, SCHEMA_REASONING
+    SCHEMA_SIMPLE, SCHEMA_REASONING,
+    FCOT_MACRO_PROMPT, FCOT_MESO_PROMPT, FCOT_SYNTHESIS_PROMPT
 )
 from toon_parser import parse_veracity_toon
 
@@ -169,7 +170,7 @@ async def attempt_toon_repair(original_text: str, schema: str, client, model_typ
         logger.error(f"Repair failed: {e}")
         return original_text
 
-async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict, include_comments: bool):
+async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript: str, gemini_config: dict, include_comments: bool, reasoning_method: str = "cot"):
     if genai_legacy is None:
         yield "ERROR: Legacy SDK missing.\n"
         return
@@ -187,17 +188,48 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
         toon_schema = SCHEMA_REASONING if include_comments else SCHEMA_SIMPLE
         score_instructions = SCORE_INSTRUCTIONS_REASONING if include_comments else SCORE_INSTRUCTIONS_SIMPLE
         
-        prompt_text = LABELING_PROMPT_TEMPLATE.format(
-            caption=caption, 
-            transcript=transcript,
-            toon_schema=toon_schema,
-            score_instructions=score_instructions
-        )
+        raw_text = ""
+        prompt_used = ""
 
-        yield "Generating Labels..."
-        response = await loop.run_in_executor(None, lambda: model.generate_content([prompt_text, uploaded_file], generation_config={"temperature": 0.1}))
-        
-        raw_text = response.text
+        if reasoning_method == "fcot":
+            # --- Fractal Chain of Thought (Multi-Turn) ---
+            yield "Starting Fractal Chain of Thought (FCoT)..."
+            chat = model.start_chat(history=[])
+            
+            # 1. Macro Scale
+            yield "FCoT Step 1: Macro-Scale Hypothesis..."
+            macro_prompt = FCOT_MACRO_PROMPT.format(caption=caption, transcript=transcript)
+            res1 = await loop.run_in_executor(None, lambda: chat.send_message([uploaded_file, macro_prompt]))
+            macro_hypothesis = res1.text
+            yield f"Macro Hypothesis: {macro_hypothesis[:100]}...\n"
+
+            # 2. Meso Scale
+            yield "FCoT Step 2: Meso-Scale Expansion (Recursive Verification)..."
+            meso_prompt = FCOT_MESO_PROMPT.format(macro_hypothesis=macro_hypothesis)
+            res2 = await loop.run_in_executor(None, lambda: chat.send_message(meso_prompt))
+            micro_observations = res2.text
+            yield f"Micro Check Completed.\n"
+
+            # 3. Synthesis
+            yield "FCoT Step 3: Synthesis & Consensus..."
+            synthesis_prompt = FCOT_SYNTHESIS_PROMPT.format(toon_schema=toon_schema, score_instructions=score_instructions)
+            res3 = await loop.run_in_executor(None, lambda: chat.send_message(synthesis_prompt))
+            
+            raw_text = res3.text
+            prompt_used = f"FCoT Pipeline:\nMacro: {macro_prompt}\nMeso: {meso_prompt}\nSynthesis: {synthesis_prompt}"
+
+        else:
+            # --- Standard Chain of Thought (Single Turn) ---
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption, 
+                transcript=transcript,
+                toon_schema=toon_schema,
+                score_instructions=score_instructions
+            )
+            prompt_used = prompt_text
+            yield "Generating Labels (Standard CoT)..."
+            response = await loop.run_in_executor(None, lambda: model.generate_content([prompt_text, uploaded_file], generation_config={"temperature": 0.1}))
+            raw_text = response.text
         
         if not raw_text:
              yield "Model returned empty response (possibly triggered safety filter)."
@@ -212,14 +244,13 @@ async def run_gemini_labeling_pipeline(video_path: str, caption: str, transcript
              raw_text = await attempt_toon_repair(raw_text, toon_schema, None, 'gemini', gemini_config)
              parsed_data = parse_veracity_toon(raw_text)
 
-        # Added prompt_used to return dict
-        yield {"raw_toon": raw_text, "parsed_data": parsed_data, "prompt_used": prompt_text}
+        yield {"raw_toon": raw_text, "parsed_data": parsed_data, "prompt_used": prompt_used}
         await loop.run_in_executor(None, lambda: genai_legacy.delete_file(name=uploaded_file.name))
 
     except Exception as e:
         yield f"ERROR: {e}"
 
-async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript: str, vertex_config: dict, include_comments: bool):
+async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript: str, vertex_config: dict, include_comments: bool, reasoning_method: str = "cot"):
     if genai is None:
         yield "ERROR: 'google-genai' not installed.\n"
         return
@@ -239,15 +270,10 @@ async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript
         toon_schema = SCHEMA_REASONING if include_comments else SCHEMA_SIMPLE
         score_instructions = SCORE_INSTRUCTIONS_REASONING if include_comments else SCORE_INSTRUCTIONS_SIMPLE
         
-        prompt_text = LABELING_PROMPT_TEMPLATE.format(
-            caption=caption, 
-            transcript=transcript,
-            toon_schema=toon_schema,
-            score_instructions=score_instructions
-        )
+        raw_text = ""
+        prompt_used = ""
         
-        yield "Generating Labels (Vertex AI)..."
-        
+        loop = asyncio.get_event_loop()
         config = GenerateContentConfig(
             temperature=0.1,
             response_mime_type="text/plain",
@@ -255,17 +281,52 @@ async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript
             tools=[Tool(google_search=GoogleSearch())]
         )
 
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None, 
-            lambda: client.models.generate_content(
-                model=model_name,
-                contents=[video_part, prompt_text],
-                config=config
+        if reasoning_method == "fcot":
+            # --- Fractal Chain of Thought (Vertex) ---
+            yield "Starting Fractal Chain of Thought (Vertex FCoT)..."
+            chat = client.chats.create(model=model_name, config=config)
+            
+            # 1. Macro
+            yield "FCoT Step 1: Macro-Scale..."
+            macro_prompt = FCOT_MACRO_PROMPT.format(caption=caption, transcript=transcript)
+            # First message must contain the video
+            res1 = await loop.run_in_executor(None, lambda: chat.send_message([video_part, macro_prompt]))
+            macro_hypothesis = res1.text
+            yield f"Hypothesis: {macro_hypothesis[:80]}...\n"
+
+            # 2. Meso
+            yield "FCoT Step 2: Meso-Scale..."
+            meso_prompt = FCOT_MESO_PROMPT.format(macro_hypothesis=macro_hypothesis)
+            res2 = await loop.run_in_executor(None, lambda: chat.send_message(meso_prompt))
+            
+            # 3. Synthesis
+            yield "FCoT Step 3: Synthesis..."
+            synthesis_prompt = FCOT_SYNTHESIS_PROMPT.format(toon_schema=toon_schema, score_instructions=score_instructions)
+            res3 = await loop.run_in_executor(None, lambda: chat.send_message(synthesis_prompt))
+            
+            raw_text = res3.text
+            prompt_used = f"FCoT (Vertex):\nMacro: {macro_prompt}\nMeso: {meso_prompt}\nSynthesis: {synthesis_prompt}"
+
+        else:
+            # --- Standard CoT ---
+            prompt_text = LABELING_PROMPT_TEMPLATE.format(
+                caption=caption, 
+                transcript=transcript,
+                toon_schema=toon_schema,
+                score_instructions=score_instructions
             )
-        )
-        
-        raw_text = response.text
+            prompt_used = prompt_text
+            yield "Generating Labels (Vertex CoT)..."
+            
+            response = await loop.run_in_executor(
+                None, 
+                lambda: client.models.generate_content(
+                    model=model_name,
+                    contents=[video_part, prompt_text],
+                    config=config
+                )
+            )
+            raw_text = response.text
         
         if not raw_text:
              yield "Model returned empty response."
@@ -280,8 +341,7 @@ async def run_vertex_labeling_pipeline(video_path: str, caption: str, transcript
             raw_text = await attempt_toon_repair(raw_text, toon_schema, client, 'vertex', vertex_config)
             parsed_data = parse_veracity_toon(raw_text)
 
-        # Added prompt_used to return dict
-        yield {"raw_toon": raw_text, "parsed_data": parsed_data, "prompt_used": prompt_text}
+        yield {"raw_toon": raw_text, "parsed_data": parsed_data, "prompt_used": prompt_used}
             
     except Exception as e:
         yield f"ERROR: {e}"

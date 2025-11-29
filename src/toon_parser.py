@@ -10,6 +10,7 @@ def parse_toon_line(line_def, data_line):
     """
     Parses a single TOON data line based on headers.
     Handles CSV-style quoting for text fields.
+    Robustly handles '9/10' or '(9)' formats in numeric fields.
     """
     if not data_line or data_line.isspace():
         return {}
@@ -22,18 +23,28 @@ def parse_toon_line(line_def, data_line):
         except StopIteration:
             values = []
         
-        # CLEANUP: Strip parentheses if the model output numbers as (9) instead of 9
-        values = [v.strip().replace('(', '').replace(')', '') for v in values]
+        cleaned_values = []
+        for v in values:
+            v_str = v.strip()
+            # Remove parens: (9) -> 9
+            v_str = v_str.replace('(', '').replace(')', '')
+            # Handle fractional scores: 9/10 -> 9
+            if '/' in v_str and any(c.isdigit() for c in v_str):
+                parts = v_str.split('/')
+                # If first part is digit, take it. 
+                if parts[0].strip().isdigit():
+                    v_str = parts[0].strip()
+            cleaned_values.append(v_str)
 
         headers = line_def.get('headers', [])
         
         # Ensure values match headers length if possible, or pad
-        if len(values) < len(headers):
-            values += [""] * (len(headers) - len(values))
-        elif len(values) > len(headers):
-            values = values[:len(headers)]
+        if len(cleaned_values) < len(headers):
+            cleaned_values += [""] * (len(headers) - len(cleaned_values))
+        elif len(cleaned_values) > len(headers):
+            cleaned_values = cleaned_values[:len(headers)]
 
-        return dict(zip(headers, values))
+        return dict(zip(headers, cleaned_values))
     except Exception as e:
         logger.error(f"Error parsing TOON line '{data_line}': {e}")
         return {}
@@ -41,6 +52,7 @@ def parse_toon_line(line_def, data_line):
 def fuzzy_extract_scores(text: str) -> dict:
     """
     Fallback method. Scans text for key metrics followed near-immediately by a number.
+    Handles: "Visual: 9", "Visual - 9", "Visual: 9/10", "Accuracy: 9/10"
     """
     scores = {
         'visual': '0', 'audio': '0', 'source': '0', 'logic': '0', 'emotion': '0',
@@ -48,8 +60,11 @@ def fuzzy_extract_scores(text: str) -> dict:
     }
     
     # Mappings: Regex Pattern -> Score Key
+    # Added 'accuracy' mapping to 'visual' as a last resort if model conflates sections
     mappings = [
         ('visual', 'visual'),
+        ('visual.*?integrity', 'visual'),
+        ('accuracy', 'visual'), # Fallback: sometimes model puts accuracy in list
         ('audio', 'audio'),
         ('source', 'source'),
         ('logic', 'logic'),
@@ -60,12 +75,20 @@ def fuzzy_extract_scores(text: str) -> dict:
     ]
 
     for pattern_str, key in mappings:
-        # Look for pattern, optional separators (: or - or space), then a number 1-10 or 100.
-        # Handles cases like: "Visual: 9", "Visual - 9", "Visual (9)"
-        pattern = re.compile(fr'(?i){pattern_str}\s*[:=\-\s\(]+\s*(\b10\b|[0-9])')
+        # Regex explanation:
+        # (?i) : Case insensitive
+        # {pattern_str} : The keyword
+        # .*? : Non-greedy match for anything between key and score (allow "Score:", "(High)", etc)
+        # [:=\-\s\(]+ : delimiters
+        # (\b10\b|\b\d\b) : Matches 10 or single digit 0-9
+        # (?:/10)? : Optional /10 suffix (ignored but allowed)
+        pattern = re.compile(fr'(?i){pattern_str}.*?[:=\-\s\(]+(\b10\b|\b\d\b)(?:/10)?')
         match = pattern.search(text)
         if match:
-            scores[key] = match.group(1)
+            # If we already have a score and this is a weak match (accuracy), skip? 
+            # For now, overwrite only if 0.
+            if scores[key] == '0':
+                scores[key] = match.group(1)
     
     return scores
 
@@ -73,7 +96,7 @@ def parse_veracity_toon(text: str) -> dict:
     """
     Parses the Veracity Vector TOON output into a standardized dictionary.
     Handles "Simple", "Reasoning", and new "Modalities" blocks.
-    Robust against Markdown formatting artifacts.
+    Robust against Markdown formatting artifacts and nested reports.
     """
     if not text:
         return {}
@@ -85,11 +108,15 @@ def parse_veracity_toon(text: str) -> dict:
 
     parsed_sections = {}
 
-    # 2. Relaxed Regex for TOON Block Headers
+    # 2. Robust Regex for TOON Block Headers
     # Matches: key : type [ count ] { headers } :
-    # Made [count] optional to handle model hallucinations
+    # Changes: 
+    # - Removed ^ anchor to allow finding blocks inside text reports
+    # - Made type optional (?:\w+\s*)?
+    # - Made count optional (?:\[...\])?
+    # - Headers captured in group 3
     block_pattern = re.compile(
-        r'^\s*([a-zA-Z0-9_]+)\s*:\s*(?:\w+\s*)?(?:\[\s*(\d+)\s*\])?\s*\{\s*(.*?)\s*\}\s*:\s*', 
+        r'([a-zA-Z0-9_]+)\s*:\s*(?:\w+\s*)?(?:\[\s*(\d+)\s*\])?\s*\{\s*(.*?)\s*\}\s*:\s*', 
         re.MULTILINE
     )
     
@@ -110,7 +137,10 @@ def parse_veracity_toon(text: str) -> dict:
         lines = [line.strip() for line in block_content.splitlines() if line.strip()]
         
         data_items = []
-        for line in lines[:count]:
+        # If count says 1 but lines are empty, try to grab the first non-empty line
+        valid_lines = [l for l in lines if len(l) > 1] # Filter tiny garbage
+        
+        for line in valid_lines[:count]:
             item = parse_toon_line({'key': key, 'headers': headers}, line)
             data_items.append(item)
             
@@ -147,12 +177,13 @@ def parse_veracity_toon(text: str) -> dict:
     if isinstance(vectors_data, dict): # Simple schema
         v = vectors_data
         if any(val and val != '0' for val in v.values()):
-            flat_result['veracity_vectors']['visual_integrity_score'] = v.get('visual', '0')
-            flat_result['veracity_vectors']['audio_integrity_score'] = v.get('audio', '0')
-            flat_result['veracity_vectors']['source_credibility_score'] = v.get('source', '0')
-            flat_result['veracity_vectors']['logical_consistency_score'] = v.get('logic', '0')
-            flat_result['veracity_vectors']['emotional_manipulation_score'] = v.get('emotion', '0')
+            if 'visual' in v: flat_result['veracity_vectors']['visual_integrity_score'] = v['visual']
+            if 'audio' in v: flat_result['veracity_vectors']['audio_integrity_score'] = v['audio']
+            if 'source' in v: flat_result['veracity_vectors']['source_credibility_score'] = v['source']
+            if 'logic' in v: flat_result['veracity_vectors']['logical_consistency_score'] = v['logic']
+            if 'emotion' in v: flat_result['veracity_vectors']['emotional_manipulation_score'] = v['emotion']
             got_vectors = True
+
     elif isinstance(vectors_data, list): # Reasoning schema
         for item in vectors_data:
             cat = item.get('category', '').lower()
@@ -169,28 +200,29 @@ def parse_veracity_toon(text: str) -> dict:
     modalities_data = parsed_sections.get('modalities', [])
     if isinstance(modalities_data, dict): # Simple schema
         m = modalities_data
-        if 'video_audio_score' in m: flat_result['modalities']['video_audio_score'] = m['video_audio_score']
-        if 'video_caption_score' in m: flat_result['modalities']['video_caption_score'] = m['video_caption_score']
-        if 'audio_caption_score' in m: flat_result['modalities']['audio_caption_score'] = m['audio_caption_score']
-        got_modalities = True
+        for k, v in m.items():
+            k_clean = k.lower().replace(' ', '').replace('-', '').replace('_', '')
+            if 'videoaudio' in k_clean: flat_result['modalities']['video_audio_score'] = v
+            elif 'videocaption' in k_clean: flat_result['modalities']['video_caption_score'] = v
+            elif 'audiocaption' in k_clean: flat_result['modalities']['audio_caption_score'] = v
+            if v and v != '0': got_modalities = True
+
     elif isinstance(modalities_data, list): # Reasoning schema
         for item in modalities_data:
-            cat = item.get('category', '').lower().replace(' ', '')
+            cat = item.get('category', '').lower().replace(' ', '').replace('-', '').replace('_', '')
             score = item.get('score', '0')
             if score and score != '0':
                 got_modalities = True
-            # Check against condensed category names
             if 'videoaudio' in cat: flat_result['modalities']['video_audio_score'] = score
             elif 'videocaption' in cat: flat_result['modalities']['video_caption_score'] = score
             elif 'audiocaption' in cat: flat_result['modalities']['audio_caption_score'] = score
 
     # --- FUZZY FALLBACK ---
+    # Only run if we are missing critical data
     if not got_vectors or not got_modalities:
         fuzzy_scores = fuzzy_extract_scores(text)
         
         if not got_vectors:
-            # Only warn if we genuinely had to use fuzzy because structural failed
-            logger.warning("Vectors missing in TOON. Applying Fuzzy Fallback.")
             flat_result['veracity_vectors']['visual_integrity_score'] = fuzzy_scores['visual']
             flat_result['veracity_vectors']['audio_integrity_score'] = fuzzy_scores['audio']
             flat_result['veracity_vectors']['source_credibility_score'] = fuzzy_scores['source']
@@ -198,7 +230,6 @@ def parse_veracity_toon(text: str) -> dict:
             flat_result['veracity_vectors']['emotional_manipulation_score'] = fuzzy_scores['emotion']
             
         if not got_modalities:
-            logger.warning("Modalities missing in TOON. Applying Fuzzy Fallback.")
             flat_result['modalities']['video_audio_score'] = fuzzy_scores['video_audio']
             flat_result['modalities']['video_caption_score'] = fuzzy_scores['video_caption']
             flat_result['modalities']['audio_caption_score'] = fuzzy_scores['audio_caption']

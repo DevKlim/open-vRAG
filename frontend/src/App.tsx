@@ -3,7 +3,7 @@ import {
   AlertCircle, Play, Upload, Layers, Terminal, Cpu, Activity, 
   FileText, Zap, MessageSquare, Sliders, LayoutDashboard, FileJson, 
   ChevronDown, ChevronRight, Bot, Database, Trash2, Eye, StopCircle, List,
-  CheckCircle, XCircle
+  CheckCircle, XCircle, BrainCircuit
 } from 'lucide-react';
 
 function App() {
@@ -17,6 +17,7 @@ function App() {
 
   const [videoUrl, setVideoUrl] = useState('');
   const [model, setModel] = useState('vertex'); 
+  const [reasoningMethod, setReasoningMethod] = useState('cot');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   
@@ -104,6 +105,21 @@ function App() {
     } catch (e) { alert("Fail: " + e); }
   };
 
+  const handleQueueDelete = async (link: string) => {
+    if(!confirm("Remove this link from queue?")) return;
+    try {
+        const res = await fetch(`/queue/delete?link=${encodeURIComponent(link)}`, { method: 'DELETE' });
+        const json = await res.json();
+        if(json.status === 'success') {
+            setRefreshTrigger(prev => prev + 1);
+        } else {
+            alert("Error: " + json.message);
+        }
+    } catch(err) {
+        console.error(err);
+    }
+  }
+
   return (
     <div className="flex h-screen w-full bg-[#09090b] text-slate-200 font-sans overflow-hidden">
       
@@ -154,6 +170,28 @@ function App() {
               )}
             </div>
 
+            <div className="space-y-3">
+                <label className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                    <BrainCircuit className="w-3 h-3" /> Reasoning Architecture
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                    <button type="button" 
+                        onClick={() => setReasoningMethod('cot')}
+                        className={`py-2 px-3 rounded text-xs border ${reasoningMethod === 'cot' ? 'bg-indigo-900/40 border-indigo-500 text-indigo-300' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700'}`}>
+                        Standard CoT
+                    </button>
+                    <button type="button" 
+                        onClick={() => setReasoningMethod('fcot')}
+                        className={`py-2 px-3 rounded text-xs border ${reasoningMethod === 'fcot' ? 'bg-indigo-900/40 border-indigo-500 text-indigo-300' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700'}`}>
+                        Fractal CoT
+                    </button>
+                </div>
+                <input type="hidden" name="reasoning_method" value={reasoningMethod} />
+                <p className="text-[10px] text-slate-500">
+                    {reasoningMethod === 'cot' ? "Single-pass linear chain of thought." : "Recursive Multi-Scale (Macro → Meso → Consensus)."}
+                </p>
+            </div>
+
             {activeTab === 'queue' && (
                <div className="space-y-4">
                  <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-slate-700 hover:border-indigo-500 hover:bg-indigo-500/5 rounded-xl p-4 text-center cursor-pointer transition-colors">
@@ -175,7 +213,10 @@ function App() {
                </div>
             )}
             
-            <input type="hidden" name="include_comments" value="true" />
+            <div className="flex items-center gap-2 mt-4 bg-slate-900 p-2 rounded border border-slate-800">
+               <input type="checkbox" name="include_comments" id="include_comments" value="true" className="rounded bg-slate-800 border-slate-700 text-indigo-500 focus:ring-offset-0 focus:ring-0" />
+               <label htmlFor="include_comments" className="text-xs text-slate-400 select-none cursor-pointer">Include Reasoning (Detailed Schema)</label>
+            </div>
           </form>
         </div>
 
@@ -211,16 +252,21 @@ function App() {
                 <div className="flex-1 flex flex-col gap-4">
                     <div className="h-1/2 bg-slate-900/30 border border-slate-800 rounded-xl overflow-auto custom-scrollbar">
                         <table className="w-full text-left text-xs text-slate-400">
-                            <thead className="bg-slate-900 text-slate-300 sticky top-0"><tr><th className="p-3">Link</th><th className="p-3">Ingested</th><th className="p-3">Status</th></tr></thead>
+                            <thead className="bg-slate-900 text-slate-300 sticky top-0"><tr><th className="p-3">Link</th><th className="p-3">Ingested</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr></thead>
                             <tbody className="divide-y divide-slate-800/50">
                                 {queueList.map((q,i) => (
                                     <tr key={i} className="hover:bg-white/5">
                                         <td className="p-3 truncate max-w-[300px] text-sky-500">{q.link}</td>
                                         <td className="p-3 text-slate-500">{q.timestamp}</td>
                                         <td className="p-3"><span className={`px-2 py-0.5 rounded ${q.status==='Processed' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>{q.status}</span></td>
+                                        <td className="p-3 text-right">
+                                            <button onClick={()=>handleQueueDelete(q.link)} className="text-slate-500 hover:text-red-500 p-1">
+                                                <Trash2 className="w-4 h-4"/>
+                                            </button>
+                                        </td>
                                     </tr>
                                 ))}
-                                {queueList.length===0 && <tr><td colSpan={3} className="p-4 text-center">Queue empty. Upload CSV or use Extension.</td></tr>}
+                                {queueList.length===0 && <tr><td colSpan={4} className="p-4 text-center">Queue empty. Upload CSV or use Extension.</td></tr>}
                             </tbody>
                         </table>
                     </div>
