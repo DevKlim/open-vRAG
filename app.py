@@ -115,7 +115,13 @@ async def run_subprocess_async(command: list[str]):
     """Asynchronously runs a subprocess and captures its output."""
     process = await asyncio.create_subprocess_exec(
         *command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await process.communicate()
+    except asyncio.CancelledError:
+        logging.warning(f"Subprocess cancelled: {command}")
+        process.kill()
+        raise
+
     if process.returncode != 0:
         error_details = stderr.decode()
         logging.error(f"FFmpeg command failed: {command}")

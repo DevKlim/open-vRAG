@@ -85,3 +85,4 @@ Thumbs.db
 clickbaitDataAndTraining/
 *.csv
 !data/dataset.csv
+AutogluonModels/
