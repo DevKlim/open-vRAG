@@ -2,48 +2,31 @@
 
 import pandas as pd
 import re
+import os
+import shutil
 from sklearn.model_selection import train_test_split
 from autogluon.tabular import TabularDataset, TabularPredictor
-from autogluon.multimodal import MultiModalPredictor
+from sklearn.metrics import classification_report
 
-# 1. Load Sentiment140 CSV
-csv_path = "training.1600000.processed.noemoticon.csv"  # change path
-cols = ['target', 'id', 'date', 'flag', 'user', 'text']
-df = pd.read_csv(csv_path, encoding='latin-1', names=cols)
+# --- 1. Load Data ---
+csv_path = "C:\\Users\\kevin\\Documents\\GitHub\\open-vRAG\\sentiment-analysis\\processed.csv"
+if not os.path.exists(csv_path):
+    print(f"ERROR: File '{csv_path}' not found.")
+    print("Please run 'preprocess.py' first.")
+    import sys
+    sys.exit()
 
-# 2. Create numeric sentiment label: -1, 0, 1
-# Original Sentiment140: 0 = negative, 2 = neutral (if present), 4 = positive
+print(f"Loading dataset from '{csv_path}'...")
+df = pd.read_csv(csv_path)
+
+# --- 2. Define Label ---
 label_col = 'sentiment_3class'
+print(f"Unique classes: {df[label_col].unique()}")
 
-mapping_3class = {
-    0: -1,   # negative
-    2:  0,   # neutral
-    4:  1    # positive
-}
+# Note: Data is already cleaned by preprocess.py
+data = df
 
-df[label_col] = df['target'].map(mapping_3class)
-
-# Drop rows with labels not in {0,2,4} (or any NaNs from the mapping)
-df = df.dropna(subset=[label_col])
-
-# 3. Keep only tweet text as feature (you can add more later if you want)
-data = df[['text', label_col]]
-
-# Optional: subsample for speed while experimenting
-data = data.sample(200_000, random_state=0)
-
-def clean_tweet(t):
-    t = str(t)
-    t = t.lower()
-    t = re.sub(r'http\S+', ' URL ', t)        # remove URLs
-    t = re.sub(r'@\w+', ' USER ', t)         # remove @handles
-    t = re.sub(r'#', ' ', t)                 # drop hash sign
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t
-
-data['text'] = data['text'].apply(clean_tweet)
-
-# 4. Train/valid split
+# --- 3. Split Data ---
 train_df, test_df = train_test_split(
     data,
     test_size=0.2,
@@ -51,34 +34,69 @@ train_df, test_df = train_test_split(
     stratify=data[label_col]
 )
 
+print(f"Training set size: {len(train_df)}")
+print(f"Testing set size: {len(test_df)}")
+
 train_data = TabularDataset(train_df)
 test_data = TabularDataset(test_df)
 
-# 5. Train AutoGluon model (includes Random Forest)
+# --- 4. Initialize and Train the Tabular Predictor ---
+save_path = 'AutogluonModels/sentimentAnalysis'
+
+if os.path.exists(save_path):
+    print(f"Removing existing model directory: {save_path}")
+    shutil.rmtree(save_path)
+
+# Initialize the TabularPredictor
 predictor = TabularPredictor(
     label=label_col,
     eval_metric='accuracy',
-    path='AutogluonModels/sentimentAnalysis'
-).fit(
+    path=save_path
+)
+
+print("--- Starting AutoGluon Tabular training with custom model list... ---")
+predictor.fit(
     train_data,
-    presets='best_quality',
-    time_limit=7200,
+    time_limit=300, # Set a shorter limit for simpler models (5 min)
+    presets='medium_quality_faster_train', # Use a preset suitable for tabular data
+    
+    # We use included_model_types to specify only the simple models we want.
     hyperparameters={
-        'RF': {},        # Random Forest
-        'GBM': {},       # LightGBM
-        'CAT': {},       # CatBoost
-        'NN_TORCH': {},  # Neural net
+        'LR': {},          # Logistic Regression
+        'RF': {},          # Random Forest
+        'XGB': {},         # XGBoost
     }
 )
+print("--- Training complete. ---")
 
-# 6. Evaluate
-print("Test metrics:")
-print(predictor.evaluate(test_data))
+# --- 5. Model Leaderboard and Performance ---
+print("\n--- Model Leaderboard (All Trained Models) ---")
+leaderboard = predictor.leaderboard(test_data)
+print(leaderboard)
 
-# 7. Leaderboard (see how RF compares)
-leaderboard = predictor.leaderboard(test_data, silent=False)
+# Extract the final ensemble score from the leaderboard
+ensemble_score = leaderboard.iloc[0]['score_test']
+print(f"\nFinal Ensemble Score ({predictor.eval_metric}): {ensemble_score:.4f}")
+
+# Generate and print the Classification Report
+predictions = predictor.predict(test_data)
+report = classification_report(
+    test_data[label_col],
+    predictions
+)
+print("\n--- Classification Report ---")
+print(report)
+
+# --- 6. OPTIMIZE: Keep ALL Models ---
+print("\n--- Model Optimization: Keeping ALL Models ---")
+
+# Get the names of all models from the leaderboard
+top_model_names = leaderboard['model'].tolist()
+
+print(f"Persisting and cleaning up model directory, keeping only: {top_model_names}")
+predictor.delete_models(
+    models_to_keep=top_model_names, 
+    dry_run=False 
 )
 
-print("\n=== Transformer (MultiModal) model performance ===")
-mm_metrics = mm_predictor.evaluate(test_df)
-print(mm_metrics)
+print("Model cleanup complete. The saved model folder now contains only the top components.")
