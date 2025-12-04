@@ -19,7 +19,8 @@ OUTPUT_CSV = 'benchmark_results.csv'
 SAMPLE_SIZE = 20  # Increased as per user request (implied "20 runs")
 
 # API Key provided by user
-API_KEY = "AIzaSyBJfMhWQFUI1Dg3nu3i1WFEWUy-v10nwyc"
+# API Key provided by user
+API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # --- Helper Functions ---
 
